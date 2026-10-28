@@ -75,6 +75,36 @@ void main() {
     expect(find.textContaining('DEMO WALLET'), findsNothing);
   });
 
+  testWidgets('About Us shows the licensed business information', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const BechaKenaHubApp());
+
+    await tester.tap(find.text('About Us'));
+    await tester.pumpAndSettle();
+    expect(find.text('M/S Riyad Medicine Corner'), findsOneWidget);
+    expect(find.text('TRAD/BCC/22794/2025'), findsOneWidget);
+    expect(find.text('Sadar Road, Barishal (Ward No: 19)'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Reseller'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Open navigation'));
+    await tester.pumpAndSettle();
+    final drawerList = find.descendant(
+      of: find.byType(Drawer),
+      matching: find.byType(Scrollable),
+    );
+    await tester.drag(drawerList, const Offset(0, -400));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('About Us'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('M/S Riyad Medicine Corner'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('reseller catalog opens details for the selected product', (
     tester,
   ) async {

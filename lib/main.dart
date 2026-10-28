@@ -141,7 +141,7 @@ const resellerNav = <_NavItem>[
 
 const adminNav = <_NavItem>[
   _NavItem('adminHome', 'Home', Icons.space_dashboard_rounded),
-  _NavItem('customers', 'Customers', Icons.people_alt_rounded),
+  _NavItem('customers', 'Customer', Icons.people_alt_rounded),
   _NavItem('products', 'Products', Icons.inventory_2_rounded),
   _NavItem('batch', 'Batch', Icons.layers_rounded),
   _NavItem('settings', 'Settings', Icons.settings_rounded),
@@ -153,12 +153,11 @@ const adminMenu = <_NavItem>[
   _NavItem('products', 'Product Management', Icons.inventory_2_rounded),
   _NavItem('resellers', 'Reseller Management', Icons.storefront_rounded),
   _NavItem('batch', 'Batch Management', Icons.layers_rounded),
-  _NavItem('withdrawals', 'Withdrawal & Disbursement', Icons.payments_rounded),
   _NavItem('adminOrders', 'Order Management', Icons.receipt_long_rounded),
+  _NavItem('withdrawals', 'Withdrawal & Disbursement', Icons.payments_rounded),
   _NavItem('adminWallet', 'Wallet', Icons.account_balance_wallet_rounded),
   _NavItem('adminNotifications', 'Notifications', Icons.notifications_rounded),
   _NavItem('settings', 'Settings', Icons.settings_rounded),
-  _NavItem('about', 'About Us', Icons.info_outline_rounded),
 ];
 
 class HubShell extends StatefulWidget {
@@ -324,37 +323,14 @@ class _HubShellState extends State<HubShell> {
                   _go(isReseller ? 'notifications' : 'adminNotifications'),
               icon: const Icon(Icons.notifications_none_rounded),
             ),
-            PopupMenuButton<String>(
-              tooltip: 'Account and app sections',
+            IconButton(
+              tooltip: 'My profile',
+              onPressed: () => _go('profile'),
               icon: const CircleAvatar(
                 radius: 16,
                 backgroundColor: Color(0xFFE9EAFE),
                 child: Icon(Icons.person_rounded, size: 19, color: brand),
               ),
-              onSelected: (value) {
-                if (value == 'switch') {
-                  _switchRole();
-                } else {
-                  _go(value);
-                }
-              },
-              itemBuilder: (context) => [
-                if (isReseller) ...[
-                  const PopupMenuItem(
-                    value: 'profile',
-                    child: Text('My profile'),
-                  ),
-                  const PopupMenuItem(value: 'login', child: Text('Sign in')),
-                  const PopupMenuItem(
-                    value: 'register',
-                    child: Text('Create account'),
-                  ),
-                ],
-                const PopupMenuItem(
-                  value: 'switch',
-                  child: Text('Switch app section'),
-                ),
-              ],
             ),
             const SizedBox(width: 8),
           ],
@@ -789,15 +765,6 @@ class HubDrawer extends StatelessWidget {
                       ),
                     ),
                 ],
-              ),
-            ),
-            const Divider(height: 1),
-            Material(
-              color: Colors.white,
-              child: ListTile(
-                leading: const Icon(Icons.swap_horiz_rounded),
-                title: const Text('Switch app section'),
-                onTap: onSwitch,
               ),
             ),
           ],
@@ -1321,6 +1288,21 @@ class ResellerHome extends StatelessWidget {
               ),
             ),
         const SizedBox(height: 8),
+        const SectionTitle('Recent Payment', icon: Icons.payment_rounded),
+        if (simulated.isEmpty)
+          const Panel(child: Text('No payments yet.'))
+        else
+          for (final order in simulated.toList().reversed.take(2))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _RecentActivityCard(
+                title: '#${order.id}',
+                detail: '${order.product.title} • ৳${order.wholesalePrice}',
+                status: 'Paid',
+                onTap: () => onOpen('orderDetails:${order.id}'),
+              ),
+            ),
+        const SizedBox(height: 8),
         const SectionTitle('Recent Withdraw', icon: Icons.money_rounded),
         if (recentWithdrawals.isEmpty)
           const Panel(child: Text('No withdrawal requests yet.'))
@@ -1372,7 +1354,7 @@ class ResellerHome extends StatelessWidget {
 String _orderStatusLabel(DemoOrderStatus status) => switch (status) {
   DemoOrderStatus.pending => 'Pending',
   DemoOrderStatus.processing => 'Processing',
-  DemoOrderStatus.delivered => 'Completed',
+  DemoOrderStatus.delivered => 'Delivered',
   DemoOrderStatus.cancelled => 'Cancelled',
 };
 
@@ -1539,8 +1521,7 @@ class _ResellerOrdersState extends State<ResellerOrders> {
         DemoOrderStatus.delivered => 'Delivered',
         DemoOrderStatus.cancelled => 'Cancelled',
       };
-      final filterStatus = status == 'Delivered' ? 'Completed' : status;
-      return filter == 'All' || filterStatus == filter;
+      return filter == 'All' || status == filter;
     }).toList();
 
     return PageBody(
@@ -1553,7 +1534,7 @@ class _ResellerOrdersState extends State<ResellerOrders> {
               'All',
               'Pending',
               'Processing',
-              'Completed',
+              'Delivered',
               'Cancelled',
             ],
             selected: filter,
@@ -1621,22 +1602,26 @@ class _ResellerOrdersState extends State<ResellerOrders> {
                     valueColor: green,
                   ),
                   const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                  Row(
                     children: [
-                      SizedBox(
-                        width: 120,
+                      Expanded(
                         child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: blue,
+                            side: const BorderSide(color: blue),
+                          ),
                           onPressed: () =>
                               widget.onOpen('orderDetails:${order.id}'),
                           child: const Text('View Details'),
                         ),
                       ),
-                      if (order.status == DemoOrderStatus.pending)
-                        SizedBox(
-                          width: 134,
+                      if (order.status == DemoOrderStatus.pending) ...[
+                        const SizedBox(width: 8),
+                        Expanded(
                           child: FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: green,
+                            ),
                             onPressed: () {
                               try {
                                 demoOms.confirmPayment(order);
@@ -1651,28 +1636,48 @@ class _ResellerOrdersState extends State<ResellerOrders> {
                             child: const Text('Pay & Confirm'),
                           ),
                         ),
-                      if (order.status == DemoOrderStatus.pending)
-                        SizedBox(
-                          width: 108,
+                        const SizedBox(width: 8),
+                        Expanded(
                           child: OutlinedButton(
                             style: OutlinedButton.styleFrom(
                               foregroundColor: red,
                               side: const BorderSide(color: red),
                             ),
-                            onPressed: () {
-                              try {
-                                demoOms.transferOrder(order);
-                                setState(() {});
-                                widget.onMessage(
-                                  'Order cancelled and transferred successfully.',
-                                );
-                              } on StateError catch (error) {
-                                widget.onMessage(error.message);
+                            onPressed: () async {
+                              final confirmed = await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('Cancel Order'),
+                                  content: const Text('Do you want to cancel?'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.of(context).pop(false),
+                                      child: const Text('No'),
+                                    ),
+                                    FilledButton(
+                                      style: FilledButton.styleFrom(backgroundColor: red),
+                                      onPressed: () => Navigator.of(context).pop(true),
+                                      child: const Text('Yes'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirmed == true) {
+                                try {
+                                  demoOms.transferOrder(order);
+                                  setState(() {});
+                                  widget.onMessage(
+                                    'Order cancelled successfully.',
+                                  );
+                                } on StateError catch (error) {
+                                  widget.onMessage(error.message);
+                                }
                               }
                             },
                             child: const Text('Cancel'),
                           ),
                         ),
+                      ],
                     ],
                   ),
                 ],
@@ -2353,15 +2358,7 @@ class OrderDetails extends StatelessWidget {
                     SizedBox(height: 16),
                     Row(
                       children: [
-                        Expanded(
-                          child: Text(
-                            'Batch ${order.batchId}',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
+                        Spacer(),
                         StatusPill(_orderStatusLabel(order.status)),
                       ],
                     ),
@@ -2382,10 +2379,6 @@ class OrderDetails extends StatelessWidget {
                     KeyValueRow('Mobile Number', order.customer.mobile),
                     const Divider(height: 1, color: line),
                     KeyValueRow('Address', order.customer.address),
-                    const Divider(height: 1, color: line),
-                    KeyValueRow('Reseller', order.reseller.name),
-                    const Divider(height: 1, color: line),
-                    KeyValueRow('Transfer number', '${order.transferNumber}'),
                   ],
                 ),
               ),
@@ -2408,7 +2401,7 @@ class OrderDetails extends StatelessWidget {
                     const Divider(height: 1, color: line),
                     KeyValueRow('Retail Price', '৳${order.retailPrice}'),
                     KeyValueRow(
-                      'Your Profit',
+                      'Profit',
                       '৳${order.profit}',
                       valueColor: green,
                     ),
@@ -2454,7 +2447,7 @@ class OrderDetails extends StatelessWidget {
                             }
                           }
                         : null,
-                    child: const Text('Cancel / Transfer'),
+                    child: const Text('Cancel'),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -3103,8 +3096,8 @@ class AdminHome extends StatelessWidget {
               color: green,
             ),
             MetricCard(
-              label: 'Current batch',
-              value: demoOms.currentBatchId,
+              label: 'Total Batch',
+              value: '${demoOms.batches.length}',
               color: orange,
             ),
             MetricCard(
@@ -3135,34 +3128,81 @@ class AdminHome extends StatelessWidget {
         ),
         const SizedBox(height: 18),
         const SectionTitle('Withdrawal Overview', icon: Icons.payments_rounded),
+        MetricGrid(
+          items: [
+            MetricCard(
+              label: 'Total Withdraw',
+              value: '${demoOms.withdrawals.length}',
+            ),
+            MetricCard(
+              label: 'Pending',
+              value: '${withdrawalCount(DemoWithdrawalStatus.pending)}',
+              color: orange,
+            ),
+            MetricCard(
+              label: 'Processing',
+              value: '${withdrawalCount(DemoWithdrawalStatus.processing)}',
+              color: blue,
+            ),
+            MetricCard(
+              label: 'Approved',
+              value: '${withdrawalCount(DemoWithdrawalStatus.approved)}',
+              color: green,
+            ),
+            MetricCard(
+              label: 'Cancelled',
+              value: '${withdrawalCount(DemoWithdrawalStatus.cancelled)}',
+              color: red,
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        const SectionTitle('Recent Payment', icon: Icons.payment_rounded),
         Panel(
-          child: Column(
-            children: [
-              KeyValueRow(
-                'Pending',
-                '${withdrawalCount(DemoWithdrawalStatus.pending)}',
-                valueColor: orange,
-              ),
-              const Divider(height: 1, color: line),
-              KeyValueRow(
-                'Processing',
-                '${withdrawalCount(DemoWithdrawalStatus.processing)}',
-                valueColor: blue,
-              ),
-              const Divider(height: 1, color: line),
-              KeyValueRow(
-                'Approved',
-                '${withdrawalCount(DemoWithdrawalStatus.approved)}',
-                valueColor: green,
-              ),
-              const Divider(height: 1, color: line),
-              KeyValueRow(
-                'Cancelled',
-                '${withdrawalCount(DemoWithdrawalStatus.cancelled)}',
-                valueColor: red,
-              ),
-            ],
-          ),
+          child: demoOms.orders
+                  .where((order) =>
+                      order.paymentStatus == DemoPaymentStatus.simulated)
+                  .isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text('No payments yet.'),
+                )
+              : Column(
+                  children: demoOms.orders
+                      .where((order) =>
+                          order.paymentStatus == DemoPaymentStatus.simulated)
+                      .toList()
+                      .reversed
+                      .take(3)
+                      .map((order) {
+                    return KeyValueRow(
+                      '#${order.id} • ${order.reseller.name}',
+                      '৳${order.wholesalePrice} • Paid',
+                      valueColor: green,
+                    );
+                  }).toList(),
+                ),
+        ),
+        const SizedBox(height: 18),
+        const SectionTitle('Recent Withdraw', icon: Icons.money_rounded),
+        Panel(
+          child: demoOms.withdrawals.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text('No withdrawal requests yet.'),
+                )
+              : Column(
+                  children: demoOms.withdrawals.reversed.take(3).map((request) {
+                    return KeyValueRow(
+                      '${request.id} • ${request.reseller.name}',
+                      '৳${request.amount} • ${request.method}',
+                      valueColor: request.status ==
+                              DemoWithdrawalStatus.approved
+                          ? green
+                          : orange,
+                    );
+                  }).toList(),
+                ),
         ),
         const SizedBox(height: 18),
         const SectionTitle('Quick Actions', icon: Icons.bolt_rounded),
@@ -3186,18 +3226,6 @@ class AdminHome extends StatelessWidget {
               onPressed: () => onOpen('withdrawals'),
             ),
           ],
-        ),
-        const SizedBox(height: 18),
-        const SectionTitle('Recent Orders', icon: Icons.receipt_long_rounded),
-        Panel(
-          child: Column(
-            children: demoOms.orders.reversed.take(3).map((order) {
-              return KeyValueRow(
-                '#${order.id} • ${order.reseller.name}',
-                '৳${order.wholesalePrice} • ${order.paymentStatus == DemoPaymentStatus.simulated ? 'Not verified' : 'Unpaid'}',
-              );
-            }).toList(),
-          ),
         ),
       ],
     );
@@ -4135,6 +4163,44 @@ class _AdminResellersState extends State<AdminResellers> {
                     '${reseller.name} ${value ? 'activated' : 'deactivated'}',
                   );
                 }),
+                onDelete: () async {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Delete Reseller'),
+                      content: Text(
+                        'Are you sure you want to delete ${reseller.name}? This action cannot be undone.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(false),
+                          child: const Text('Cancel'),
+                        ),
+                        FilledButton(
+                          style: FilledButton.styleFrom(backgroundColor: red),
+                          onPressed: () => Navigator.of(context).pop(true),
+                          child: const Text('Delete'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true) {
+                    setState(() {
+                      demoOms.resellers.remove(reseller);
+                      demoOms.auditLog.insert(
+                        0,
+                        'Reseller ${reseller.name} deleted.',
+                      );
+                    });
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('${reseller.name} deleted successfully.'),
+                        ),
+                      );
+                    }
+                  }
+                },
               );
             },
           ),
@@ -4161,6 +4227,7 @@ class ResellerAdminCard extends StatelessWidget {
     required this.status,
     this.active = true,
     this.onActiveChanged,
+    this.onDelete,
     super.key,
   });
   final String name;
@@ -4177,6 +4244,7 @@ class ResellerAdminCard extends StatelessWidget {
   final String status;
   final bool active;
   final ValueChanged<bool>? onActiveChanged;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -4235,6 +4303,21 @@ class ResellerAdminCard extends StatelessWidget {
                 onChanged: onActiveChanged,
               ),
             ),
+          if (onDelete != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: red,
+                  side: const BorderSide(color: red),
+                ),
+                onPressed: onDelete,
+                icon: const Icon(Icons.delete_rounded),
+                label: const Text('Delete Reseller'),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -4260,6 +4343,219 @@ class _AdminOrdersState extends State<AdminOrders> {
     DemoOrderStatus.delivered => 'Delivered',
     DemoOrderStatus.cancelled => 'Cancelled',
   };
+
+  void _showOrderDetails(BuildContext context, DemoOrder order) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Order Details - ${order.id}'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Customer Details',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              const SizedBox(height: 8),
+              KeyValueRow('Name', order.customer.name),
+              const Divider(height: 1, color: line),
+              KeyValueRow('Mobile Number', order.customer.mobile),
+              const Divider(height: 1, color: line),
+              KeyValueRow('Address', order.customer.address),
+              const SizedBox(height: 16),
+              const Text(
+                'Product Details',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              const SizedBox(height: 8),
+              KeyValueRow('Title', order.product.title),
+              const Divider(height: 1, color: line),
+              KeyValueRow('Description', order.product.description),
+              const Divider(height: 1, color: line),
+              KeyValueRow('Wholesale Price', '৳${order.wholesalePrice}'),
+              const Divider(height: 1, color: line),
+              KeyValueRow('Retail Price', '৳${order.retailPrice}'),
+              const SizedBox(height: 16),
+              const Text(
+                'Reseller Details',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              const SizedBox(height: 8),
+              KeyValueRow('Name', order.reseller.name),
+              const Divider(height: 1, color: line),
+              KeyValueRow('Mobile Number', order.reseller.mobile),
+              const Divider(height: 1, color: line),
+              KeyValueRow('Email Address', order.reseller.email),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditDialog(BuildContext context, DemoOrder order) {
+    DemoCustomer? selectedCustomer = order.customer;
+    DemoProduct? selectedProduct = order.product;
+    DemoReseller? selectedReseller = order.reseller;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Edit Order - ${order.id}'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Customer', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<DemoCustomer>(
+                  initialValue: selectedCustomer,
+                  decoration: const InputDecoration(
+                    labelText: 'Select Customer',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: demoOms.customers
+                      .map((customer) => DropdownMenuItem(
+                            value: customer,
+                            child: Text(customer.name),
+                          ))
+                      .toList(),
+                  onChanged: (value) {
+                    setDialogState(() => selectedCustomer = value);
+                  },
+                ),
+                const SizedBox(height: 16),
+                const Text('Product', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<DemoProduct>(
+                  initialValue: selectedProduct,
+                  decoration: const InputDecoration(
+                    labelText: 'Select Product',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: demoOms.products
+                      .map((product) => DropdownMenuItem(
+                            value: product,
+                            child: Text(product.title),
+                          ))
+                      .toList(),
+                  onChanged: (value) {
+                    setDialogState(() => selectedProduct = value);
+                  },
+                ),
+                const SizedBox(height: 16),
+                const Text('Reseller', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<DemoReseller>(
+                  initialValue: selectedReseller,
+                  decoration: const InputDecoration(
+                    labelText: 'Select Reseller',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: demoOms.resellers
+                      .map((reseller) => DropdownMenuItem(
+                            value: reseller,
+                            child: Text(reseller.name),
+                          ))
+                      .toList(),
+                  onChanged: (value) {
+                    setDialogState(() => selectedReseller = value);
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (selectedCustomer != null &&
+                    selectedProduct != null &&
+                    selectedReseller != null) {
+                  final index = demoOms.orders.indexOf(order);
+                  if (index >= 0) {
+                    final profitRate = demoOms.settings.profitRate;
+                    final calculatedRetailPrice = 
+                        (selectedProduct!.wholesalePrice * (100 + profitRate) / 100).round();
+                    final updatedOrder = DemoOrder(
+                      id: order.id,
+                      batchId: order.batchId,
+                      customer: selectedCustomer!,
+                      product: selectedProduct!,
+                      reseller: selectedReseller!,
+                      wholesalePrice: selectedProduct!.wholesalePrice,
+                      retailPrice: calculatedRetailPrice,
+                    )
+                      ..status = order.status
+                      ..paymentStatus = order.paymentStatus
+                      ..transferNumber = order.transferNumber;
+                    demoOms.orders[index] = updatedOrder;
+                    setState(() {});
+                    Navigator.of(dialogContext).pop();
+                    widget.onMessage('Order updated successfully.');
+                  }
+                }
+              },
+              child: const Text('Update'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _confirmCancelOrder(BuildContext context, DemoOrder order) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cancel Order'),
+        content: Text('Do you want to cancel order ${order.id}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('No'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: red),
+            onPressed: () {
+              try {
+                final index = demoOms.orders.indexOf(order);
+                if (index >= 0) {
+                  final cancelledOrder = demoOms.orders[index];
+                  
+                  // If order was paid, refund only capital to reseller wallet
+                  if (cancelledOrder.paymentStatus == DemoPaymentStatus.simulated) {
+                    cancelledOrder.reseller.capital += cancelledOrder.wholesalePrice;
+                  }
+                  
+                  demoOms.orders[index].status = DemoOrderStatus.cancelled;
+                  setState(() {});
+                  Navigator.of(context).pop();
+                  widget.onMessage('Order ${order.id} cancelled successfully.');
+                }
+              } on StateError catch (error) {
+                widget.onMessage(error.message);
+              }
+            },
+            child: const Text('Yes'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -4392,24 +4688,45 @@ class _AdminOrdersState extends State<AdminOrders> {
                         ? 'Settled • Credited'
                         : 'Pending',
                   ),
-                  if (order.status == DemoOrderStatus.pending) ...[
-                    const SizedBox(height: 10),
-                    OutlinedButton.icon(
-                      onPressed: () {
-                        try {
-                          demoOms.transferOrder(order);
-                          setState(() {});
-                          widget.onMessage(
-                            '${order.id} transferred to ${order.reseller.name}.',
-                          );
-                        } on StateError catch (error) {
-                          widget.onMessage(error.message);
-                        }
-                      },
-                      icon: const Icon(Icons.swap_horiz_rounded),
-                      label: const Text('Transfer to active reseller'),
-                    ),
-                  ],
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: blue,
+                            side: const BorderSide(color: blue),
+                          ),
+                          onPressed: () => _showOrderDetails(context, order),
+                          child: const Text('View Details'),
+                        ),
+                      ),
+                      if (order.status == DemoOrderStatus.pending) ...[
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: orange,
+                              side: const BorderSide(color: orange),
+                            ),
+                            onPressed: () => _showEditDialog(context, order),
+                            child: const Text('Edit'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: red,
+                              side: const BorderSide(color: red),
+                            ),
+                            onPressed: () => _confirmCancelOrder(context, order),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -4428,6 +4745,23 @@ class AdminBatch extends StatefulWidget {
 }
 
 class _AdminBatchState extends State<AdminBatch> {
+  @override
+  void initState() {
+    super.initState();
+    // Auto-settle batch if system is ON and batch is ready to settle
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (demoOms.settings.systemEnabled && demoOms.canSettleCurrentBatch) {
+        try {
+          demoOms.settleCurrentBatch();
+          widget.onMessage('Batch ${demoOms.batches.last.id} automatically settled.');
+          if (mounted) setState(() {});
+        } catch (e) {
+          // Ignore errors
+        }
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final progress = demoOms.currentBatchTarget == 0
@@ -5439,9 +5773,9 @@ class _AdminSettingsState extends State<AdminSettings> {
               const Divider(height: 1, color: line),
               const KeyValueRow('Division Unit', '৳50'),
               const Divider(height: 1, color: line),
-              KeyValueRow('Cycle', '${cycle.text} Hours'),
+              KeyValueRow('Cycle', '${demoOms.settings.cycleHours} Hours'),
               const Divider(height: 1, color: line),
-              KeyValueRow('Transfer', '${transfer.text} Hours'),
+              KeyValueRow('Transfer', '${demoOms.settings.transferHours} Hours'),
               const Divider(height: 1, color: line),
               KeyValueRow(
                 'Next target estimate',

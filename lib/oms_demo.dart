@@ -133,41 +133,47 @@ class DemoOmsStore {
   }
 
   void _seedInitialData() {
-    customers.addAll(const [
-      DemoCustomer('Rahim Uddin', '01700000001', 'Mirpur, Dhaka'),
-      DemoCustomer('Karim Ahmed', '01700000002', 'Dhanmondi, Dhaka'),
-      DemoCustomer('Nadia Akter', '01700000003', 'Uttara, Dhaka'),
-    ]);
-    products.addAll([
-      DemoProduct(
-        title: 'Type-C Fast Charging Cable',
-        category: 'Electronics',
-        description: 'Fast charging and data transfer cable.',
-        wholesalePrice: 200,
-      ),
-      DemoProduct(
-        title: 'USB Fast Charger',
-        category: 'Electronics',
-        description: 'Compact USB wall charger.',
-        wholesalePrice: 300,
-      ),
-      DemoProduct(
-        title: 'Wireless Mouse',
-        category: 'Electronics',
-        description: 'Ergonomic wireless mouse.',
-        wholesalePrice: 250,
-      ),
-    ]);
-    resellers.addAll([
-      DemoReseller('Rahim Store', '01710000001', 'rahim@example.com'),
-      DemoReseller('Karim Shop', '01710000002', 'karim@example.com'),
-      DemoReseller(
-        'Nadia Store',
-        '01710000003',
-        'nadia@example.com',
-        active: false,
-      ),
-    ]);
+    if (customers.isEmpty) {
+      customers.addAll(const [
+        DemoCustomer('Rahim Uddin', '01700000001', 'Mirpur, Dhaka'),
+        DemoCustomer('Karim Ahmed', '01700000002', 'Dhanmondi, Dhaka'),
+        DemoCustomer('Nadia Akter', '01700000003', 'Uttara, Dhaka'),
+      ]);
+    }
+    if (products.isEmpty) {
+      products.addAll([
+        DemoProduct(
+          title: 'Type-C Fast Charging Cable',
+          category: 'Electronics',
+          description: 'Fast charging and data transfer cable.',
+          wholesalePrice: 200,
+        ),
+        DemoProduct(
+          title: 'USB Fast Charger',
+          category: 'Electronics',
+          description: 'Compact USB wall charger.',
+          wholesalePrice: 300,
+        ),
+        DemoProduct(
+          title: 'Wireless Mouse',
+          category: 'Electronics',
+          description: 'Ergonomic wireless mouse.',
+          wholesalePrice: 250,
+        ),
+      ]);
+    }
+    if (resellers.isEmpty) {
+      resellers.addAll([
+        DemoReseller('Rahim Store', '01710000001', 'rahim@example.com'),
+        DemoReseller('Karim Shop', '01710000002', 'karim@example.com'),
+        DemoReseller(
+          'Nadia Store',
+          '01710000003',
+          'nadia@example.com',
+          active: false,
+        ),
+      ]);
+    }
   }
 
   final settings = DemoSettings();
