@@ -38,6 +38,7 @@ dependencies:
   excel: ^4.0.6
   firebase_core: ^4.15.0
   firebase_auth: ^6.7.0
+  shared_preferences: ^2.3.3
 
 dev_dependencies:
   flutter_test:
@@ -56,14 +57,14 @@ flutter_launcher_icons:
   android: true
   ios: true
   remove_alpha_ios: true
-  image_path: "lib/app icon.png"
-  adaptive_icon_background: "#000000"
-  adaptive_icon_foreground: "lib/app icon.png"
+  image_path: "assets/app_icon.png"
+  adaptive_icon_background: "#625FEA"
+  adaptive_icon_foreground: "assets/app_icon.png"
   web:
     generate: true
-    image_path: "lib/app icon.png"
-    background_color: "#000000"
-    theme_color: "#000000"
+    image_path: "assets/app_icon.png"
+    background_color: "#625FEA"
+    theme_color: "#625FEA"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -77,9 +78,8 @@ flutter:
   uses-material-design: true
 
   # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+  assets:
+    - assets/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

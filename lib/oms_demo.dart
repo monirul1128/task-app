@@ -128,52 +128,66 @@ class DemoWalletEntry {
 
 class DemoOmsStore {
   DemoOmsStore() {
+    // Load initial demo data on first launch
     _seedInitialData();
-    createNextBatch(initial: true);
+    
+    // Start with demo data - Admin can add more or reset system
+    // Only create the initial batch if we have the minimum required data
+    try {
+      if (customers.isNotEmpty && products.isNotEmpty && activeResellers.isNotEmpty) {
+        createNextBatch(initial: true);
+      }
+    } catch (e) {
+      // Ignore errors during initialization
+      // Admin will set up data and create first batch manually
+    }
   }
 
   void _seedInitialData() {
-    if (customers.isEmpty) {
-      customers.addAll(const [
-        DemoCustomer('Rahim Uddin', '01700000001', 'Mirpur, Dhaka'),
-        DemoCustomer('Karim Ahmed', '01700000002', 'Dhanmondi, Dhaka'),
-        DemoCustomer('Nadia Akter', '01700000003', 'Uttara, Dhaka'),
-      ]);
-    }
-    if (products.isEmpty) {
-      products.addAll([
-        DemoProduct(
-          title: 'Type-C Fast Charging Cable',
-          category: 'Electronics',
-          description: 'Fast charging and data transfer cable.',
-          wholesalePrice: 200,
-        ),
-        DemoProduct(
-          title: 'USB Fast Charger',
-          category: 'Electronics',
-          description: 'Compact USB wall charger.',
-          wholesalePrice: 300,
-        ),
-        DemoProduct(
-          title: 'Wireless Mouse',
-          category: 'Electronics',
-          description: 'Ergonomic wireless mouse.',
-          wholesalePrice: 250,
-        ),
-      ]);
-    }
-    if (resellers.isEmpty) {
-      resellers.addAll([
-        DemoReseller('Rahim Store', '01710000001', 'rahim@example.com'),
-        DemoReseller('Karim Shop', '01710000002', 'karim@example.com'),
-        DemoReseller(
-          'Nadia Store',
-          '01710000003',
-          'nadia@example.com',
-          active: false,
-        ),
-      ]);
-    }
+    // This method is now only used for "Reset System" functionality
+    // Clear all existing data first
+    customers.clear();
+    products.clear();
+    resellers.clear();
+    
+    // Add demo data
+    customers.addAll(const [
+      DemoCustomer('Rahim Uddin', '01700000001', 'Mirpur, Dhaka'),
+      DemoCustomer('Karim Ahmed', '01700000002', 'Dhanmondi, Dhaka'),
+      DemoCustomer('Nadia Akter', '01700000003', 'Uttara, Dhaka'),
+    ]);
+    
+    products.addAll([
+      DemoProduct(
+        title: 'Type-C Fast Charging Cable',
+        category: 'Electronics',
+        description: 'Fast charging and data transfer cable.',
+        wholesalePrice: 200,
+      ),
+      DemoProduct(
+        title: 'USB Fast Charger',
+        category: 'Electronics',
+        description: 'Compact USB wall charger.',
+        wholesalePrice: 300,
+      ),
+      DemoProduct(
+        title: 'Wireless Mouse',
+        category: 'Electronics',
+        description: 'Ergonomic wireless mouse.',
+        wholesalePrice: 250,
+      ),
+    ]);
+    
+    resellers.addAll([
+      DemoReseller('Rahim Store', '01710000001', 'rahim@example.com'),
+      DemoReseller('Karim Shop', '01710000002', 'karim@example.com'),
+      DemoReseller(
+        'Nadia Store',
+        '01710000003',
+        'nadia@example.com',
+        active: false,
+      ),
+    ]);
   }
 
   final settings = DemoSettings();
@@ -263,33 +277,60 @@ class DemoOmsStore {
   List<int> get currentDivision => divideTarget(currentBatchTarget);
 
   static int calculateNextBatchTarget(int previousTarget, int growthRate) {
-    final desiredTarget =
-        (previousTarget * (100 + growthRate) / 5000).round() * 50;
-    var previousTargetOption = 0;
-    for (var count = 1; ; count++) {
-      final targetOption = 25 * count * (count + 1);
-      if (targetOption >= desiredTarget) {
-        final distanceBelow = desiredTarget - previousTargetOption;
-        final distanceAbove = targetOption - desiredTarget;
-        return distanceAbove <= distanceBelow
-            ? targetOption
-            : previousTargetOption;
-      }
-      previousTargetOption = targetOption;
-    }
+    // Calculate growth amount: Previous Target × (Growth Rate %)
+    final growthAmount = (previousTarget * growthRate / 100).round();
+    final calculatedTarget = previousTarget + growthAmount;
+    
+    // Round up to nearest multiple of 50
+    final roundedTarget = ((calculatedTarget + 49) ~/ 50) * 50;
+    
+    return roundedTarget;
   }
 
   static List<int> divideTarget(int target) {
     if (target <= 0 || target % 50 != 0) {
       return const [];
     }
+    
+    // Division strategy:
+    // Start with base sequence: 50, 100, 150, 200, 250, 300, ...
+    // If target matches the sum of consecutive multiples, use that
+    // Otherwise, redistribute the remainder
+    
     final division = <int>[];
-    var total = 0;
-    for (var amount = 50; total < target; amount += 50) {
-      total += amount;
-      division.add(amount);
+    var remaining = target;
+    var currentAmount = 50;
+    
+    // First, try to build with progressive amounts
+    while (remaining > currentAmount) {
+      division.add(currentAmount);
+      remaining -= currentAmount;
+      currentAmount += 50;
     }
-    return total == target ? division : const [];
+    
+    // Handle the remaining amount
+    if (remaining > 0) {
+      if (remaining >= 50) {
+        // If remaining is 50 or more, add it as a separate division
+        division.add(remaining);
+      } else {
+        // If remaining is less than 50, this target cannot be divided properly
+        return const [];
+      }
+    }
+    
+    // Verify total equals target
+    final total = division.fold<int>(0, (sum, amount) => sum + amount);
+    if (total != target) {
+      return const [];
+    }
+    
+    // Verify all amounts are multiples of 50
+    if (!division.every((amount) => amount % 50 == 0)) {
+      return const [];
+    }
+    
+    return division;
   }
 
   void createNextBatch({bool initial = false}) {

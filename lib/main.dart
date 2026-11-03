@@ -7,10 +7,29 @@ import 'package:flutter/services.dart';
 import 'admin_auth.dart';
 import 'firebase_options.dart';
 import 'oms_demo.dart';
+import 'storage_service.dart';
+
+// Simple in-memory storage for registered resellers - moved here for access
+final _registeredResellers = <String, Map<String, String>>{
+  // email -> {name, mobile, password}
+  'reseller@bkh.com': {
+    'name': 'Demo Reseller',
+    'mobile': '01700000000',
+    'password': 'reseller123',
+  },
+};
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  
+  // Load persistent data from storage
+  await StorageService.loadSystemData();
+  
+  // Load registered resellers from storage
+  final storedResellers = await StorageService.getResellers();
+  _registeredResellers.addAll(storedResellers);
+  
   runApp(const BechaKenaHubApp());
 }
 
@@ -266,11 +285,21 @@ class _HubShellState extends State<HubShell> {
                   onBack: () => setState(() => _page = 'register'),
                 )
               : AuthPage(
-                  register: true,
+                  register: _page == 'register',
                   onMessage: _message,
                   onOpen: (page) {
                     if (page == 'adminLogin') {
                       setState(() => _page = 'adminLogin');
+                    } else if (page == 'adminHome') {
+                      setState(() {
+                        _role = 'admin';
+                        _page = 'adminHome';
+                      });
+                    } else if (page == 'home') {
+                      setState(() {
+                        _role = 'reseller';
+                        _page = 'home';
+                      });
                     } else {
                       _go(page);
                     }
@@ -323,15 +352,16 @@ class _HubShellState extends State<HubShell> {
                   _go(isReseller ? 'notifications' : 'adminNotifications'),
               icon: const Icon(Icons.notifications_none_rounded),
             ),
-            IconButton(
-              tooltip: 'My profile',
-              onPressed: () => _go('profile'),
-              icon: const CircleAvatar(
-                radius: 16,
-                backgroundColor: Color(0xFFE9EAFE),
-                child: Icon(Icons.person_rounded, size: 19, color: brand),
+            if (isReseller)
+              IconButton(
+                tooltip: 'My profile',
+                onPressed: () => _go('profile'),
+                icon: const CircleAvatar(
+                  radius: 16,
+                  backgroundColor: Color(0xFFE9EAFE),
+                  child: Icon(Icons.person_rounded, size: 19, color: brand),
+                ),
               ),
-            ),
             const SizedBox(width: 8),
           ],
         ],
@@ -699,13 +729,6 @@ class HubDrawer extends StatelessWidget {
               Icons.notifications_rounded,
             ),
             const _NavItem('profile', 'My Profile', Icons.person_rounded),
-            const _NavItem('login', 'Sign in', Icons.login_rounded),
-            const _NavItem(
-              'register',
-              'Create account',
-              Icons.person_add_alt_1_rounded,
-            ),
-            const _NavItem('about', 'About Us', Icons.info_outline_rounded),
           ]
         : adminMenu;
     return Drawer(
@@ -722,10 +745,27 @@ class HubDrawer extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(
-                    Icons.shopping_bag_rounded,
-                    color: Colors.white,
-                    size: 35,
+                  // Logo Section - Replace with your logo image
+                  Container(
+                    width: 60,
+                    height: 60,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Image.asset(
+                      'assets/app_icon.png',
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) {
+                        // Fallback to icon if image not found
+                        return const Icon(
+                          Icons.shopping_bag_rounded,
+                          color: brand,
+                          size: 35,
+                        );
+                      },
+                    ),
                   ),
                   const SizedBox(height: 12),
                   const Text(
@@ -764,6 +804,21 @@ class HubDrawer extends StatelessWidget {
                         onTap: () => onSelect(item.id),
                       ),
                     ),
+                  const Divider(height: 1, thickness: 1),
+                  Material(
+                    color: Colors.white,
+                    child: ListTile(
+                      leading: const Icon(Icons.logout_rounded, color: red),
+                      title: const Text(
+                        'Logout',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: red,
+                        ),
+                      ),
+                      onTap: onSwitch,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -1602,42 +1657,47 @@ class _ResellerOrdersState extends State<ResellerOrders> {
                     valueColor: green,
                   ),
                   const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: blue,
-                            side: const BorderSide(color: blue),
-                          ),
-                          onPressed: () =>
-                              widget.onOpen('orderDetails:${order.id}'),
-                          child: const Text('View Details'),
-                        ),
-                      ),
-                      if (order.status == DemoOrderStatus.pending) ...[
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: FilledButton(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: green,
+                  if (order.status == DemoOrderStatus.pending)
+                    Column(
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: blue,
+                                  side: const BorderSide(color: blue),
+                                ),
+                                onPressed: () =>
+                                    widget.onOpen('orderDetails:${order.id}'),
+                                child: const Text('View Details'),
+                              ),
                             ),
-                            onPressed: () {
-                              try {
-                                demoOms.confirmPayment(order);
-                                setState(() {});
-                                widget.onMessage(
-                                  'Payment confirmed successfully.',
-                                );
-                              } on StateError catch (error) {
-                                widget.onMessage(error.message);
-                              }
-                            },
-                            child: const Text('Pay & Confirm'),
-                          ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: FilledButton(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: green,
+                                ),
+                                onPressed: () {
+                                  try {
+                                    demoOms.confirmPayment(order);
+                                    setState(() {});
+                                    widget.onMessage(
+                                      'Payment confirmed successfully.',
+                                    );
+                                  } on StateError catch (error) {
+                                    widget.onMessage(error.message);
+                                  }
+                                },
+                                child: const Text('Pay & Confirm'),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
                           child: OutlinedButton(
                             style: OutlinedButton.styleFrom(
                               foregroundColor: red,
@@ -1651,12 +1711,15 @@ class _ResellerOrdersState extends State<ResellerOrders> {
                                   content: const Text('Do you want to cancel?'),
                                   actions: [
                                     TextButton(
-                                      onPressed: () => Navigator.of(context).pop(false),
+                                      onPressed: () =>
+                                          Navigator.of(context).pop(false),
                                       child: const Text('No'),
                                     ),
                                     FilledButton(
-                                      style: FilledButton.styleFrom(backgroundColor: red),
-                                      onPressed: () => Navigator.of(context).pop(true),
+                                      style: FilledButton.styleFrom(
+                                          backgroundColor: red),
+                                      onPressed: () =>
+                                          Navigator.of(context).pop(true),
                                       child: const Text('Yes'),
                                     ),
                                   ],
@@ -1678,8 +1741,20 @@ class _ResellerOrdersState extends State<ResellerOrders> {
                           ),
                         ),
                       ],
-                    ],
-                  ),
+                    )
+                  else
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: blue,
+                          side: const BorderSide(color: blue),
+                        ),
+                        onPressed: () =>
+                            widget.onOpen('orderDetails:${order.id}'),
+                        child: const Text('View Details'),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -2702,7 +2777,23 @@ class ProfilePage extends StatelessWidget {
                 title: const Text('Settings'),
                 subtitle: const Text('Manage your account settings'),
                 trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => onOpen('login'),
+                onTap: () {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Account Settings'),
+                      content: const Text(
+                        'Account settings feature is under development. You can update your profile information from the admin panel.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('OK'),
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
               const Divider(height: 1),
               ListTile(
@@ -2710,7 +2801,16 @@ class ProfilePage extends StatelessWidget {
                 title: const Text('Share Platform'),
                 subtitle: const Text('Share this application with others'),
                 trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () {},
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Share BKH Business Manager with your network! Download link: [Your App Store Link]',
+                      ),
+                      duration: Duration(seconds: 4),
+                    ),
+                  );
+                },
               ),
             ],
           ),
@@ -2857,6 +2957,105 @@ class AuthPage extends StatefulWidget {
 class _AuthPageState extends State<AuthPage> {
   bool obscure = true;
   bool agree = false;
+  final name = TextEditingController();
+  final mobile = TextEditingController();
+  final email = TextEditingController();
+  final password = TextEditingController();
+  final confirmPassword = TextEditingController();
+  bool busy = false;
+
+  @override
+  void dispose() {
+    name.dispose();
+    mobile.dispose();
+    email.dispose();
+    password.dispose();
+    confirmPassword.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final register = widget.register;
+    
+    if (!register) {
+      // Login logic - check for admin or reseller
+      final loginEmail = email.text.trim();
+      final loginPassword = password.text.trim();
+      
+      if (loginEmail.isEmpty || loginPassword.isEmpty) {
+        widget.onMessage('Please enter email and password');
+        return;
+      }
+      
+      // Check for Admin login
+      if (loginEmail == 'admin@bkh.com' && loginPassword == 'admin123') {
+        widget.onMessage('Admin login successful!');
+        widget.onOpen('adminHome');
+        return;
+      }
+      
+      // Check for Reseller login - check registered resellers
+      if (_registeredResellers.containsKey(loginEmail)) {
+        final reseller = _registeredResellers[loginEmail]!;
+        if (reseller['password'] == loginPassword) {
+          widget.onMessage('Reseller login successful!');
+          widget.onOpen('home');
+          return;
+        }
+      }
+      
+      widget.onMessage('Invalid email or password');
+      return;
+    }
+    
+    // Registration logic
+    await _register();
+  }
+
+  Future<void> _register() async {
+    if (name.text.trim().isEmpty || mobile.text.trim().isEmpty || 
+        email.text.trim().isEmpty || password.text.isEmpty || confirmPassword.text.isEmpty) {
+      widget.onMessage('Please fill all required fields including email');
+      return;
+    }
+    
+    if (password.text != confirmPassword.text) {
+      widget.onMessage('Passwords do not match');
+      return;
+    }
+    
+    if (!agree) {
+      widget.onMessage('Please agree to Terms & Conditions');
+      return;
+    }
+    
+    final registerEmail = email.text.trim();
+    
+    // Check if email already exists
+    if (_registeredResellers.containsKey(registerEmail)) {
+      widget.onMessage('Email already registered. Please login.');
+      widget.onOpen('login');
+      return;
+    }
+    
+    // Save registered reseller
+    _registeredResellers[registerEmail] = {
+      'name': name.text.trim(),
+      'mobile': mobile.text.trim(),
+      'password': password.text,
+    };
+    
+    // Save to persistent storage
+    await StorageService.saveReseller(
+      email: registerEmail,
+      name: name.text.trim(),
+      mobile: mobile.text.trim(),
+      password: password.text,
+    );
+    
+    widget.onMessage('Registration successful! You can now login with your email and password.');
+    widget.onOpen('login');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2904,7 +3103,7 @@ class _AuthPageState extends State<AuthPage> {
           Text(
             register
                 ? 'Join our platform and start your business today'
-                : 'Login to your reseller account',
+                : 'Login to your account (Admin or Reseller)',
             textAlign: TextAlign.center,
             style: const TextStyle(color: muted, fontSize: 15),
           ),
@@ -2914,7 +3113,7 @@ class _AuthPageState extends State<AuthPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  register ? 'Reseller Registration' : 'Reseller Login',
+                  register ? 'Reseller Registration' : 'Login',
                   style: const TextStyle(
                     color: ink,
                     fontSize: 20,
@@ -2924,22 +3123,30 @@ class _AuthPageState extends State<AuthPage> {
                 const SizedBox(height: 18),
                 if (register) ...[
                   const FieldLabel('FULL NAME'),
-                  const TextField(
-                    decoration: InputDecoration(hintText: 'Enter your full name'),
+                  TextField(
+                    controller: name,
+                    decoration: const InputDecoration(hintText: 'Enter your full name'),
                   ),
                   const SizedBox(height: 14),
                 ],
-                const FieldLabel('MOBILE NUMBER'),
-                const TextField(
-                  keyboardType: TextInputType.phone,
-                  decoration: InputDecoration(hintText: 'Enter mobile number'),
+                if (register)
+                  const FieldLabel('MOBILE NUMBER')
+                else
+                  const FieldLabel('EMAIL ADDRESS'),
+                TextField(
+                  controller: register ? mobile : email,
+                  keyboardType: register ? TextInputType.phone : TextInputType.emailAddress,
+                  decoration: InputDecoration(
+                    hintText: register ? 'Enter mobile number' : 'Enter your email address',
+                  ),
                 ),
                 if (register) ...[
                   const SizedBox(height: 14),
-                  const FieldLabel('EMAIL ADDRESS (Optional)'),
-                  const TextField(
+                  const FieldLabel('EMAIL ADDRESS'),
+                  TextField(
+                    controller: email,
                     keyboardType: TextInputType.emailAddress,
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       hintText: 'Enter your email address',
                     ),
                   ),
@@ -2947,6 +3154,7 @@ class _AuthPageState extends State<AuthPage> {
                 const SizedBox(height: 14),
                 const FieldLabel('PASSWORD'),
                 TextField(
+                  controller: password,
                   obscureText: obscure,
                   decoration: InputDecoration(
                     hintText: register ? 'Create a password' : 'Enter password',
@@ -2962,6 +3170,7 @@ class _AuthPageState extends State<AuthPage> {
                   const SizedBox(height: 14),
                   const FieldLabel('CONFIRM PASSWORD'),
                   TextField(
+                    controller: confirmPassword,
                     obscureText: obscure,
                     decoration: const InputDecoration(
                       hintText: 'Confirm your password',
@@ -2981,9 +3190,119 @@ class _AuthPageState extends State<AuthPage> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
-                      onPressed: () => widget.onMessage(
-                        'Contact support to reset your password.',
-                      ),
+                      onPressed: () async {
+                        // Forgot password dialog
+                        final emailController = TextEditingController();
+                        final mobileController = TextEditingController();
+                        final newPasswordController = TextEditingController();
+                        final confirmNewPasswordController = TextEditingController();
+                        
+                        final success = await showDialog<bool>(
+                          context: context,
+                          builder: (dialogContext) => AlertDialog(
+                            title: const Text('Reset Password'),
+                            content: SingleChildScrollView(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text(
+                                    'Enter your registered email and mobile number to reset your password.',
+                                    style: TextStyle(fontSize: 13, color: muted),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  TextField(
+                                    controller: emailController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Email',
+                                      hintText: 'Enter your registered email',
+                                      prefixIcon: Icon(Icons.email_rounded),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextField(
+                                    controller: mobileController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Mobile Number',
+                                      hintText: 'Enter your registered mobile',
+                                      prefixIcon: Icon(Icons.phone_rounded),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextField(
+                                    controller: newPasswordController,
+                                    obscureText: true,
+                                    decoration: const InputDecoration(
+                                      labelText: 'New Password',
+                                      hintText: 'Enter new password',
+                                      prefixIcon: Icon(Icons.lock_rounded),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextField(
+                                    controller: confirmNewPasswordController,
+                                    obscureText: true,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Confirm New Password',
+                                      hintText: 'Confirm your new password',
+                                      prefixIcon: Icon(Icons.lock_rounded),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(dialogContext, false),
+                                child: const Text('Cancel'),
+                              ),
+                              FilledButton(
+                                onPressed: () async {
+                                  final emailText = emailController.text.trim();
+                                  final mobileText = mobileController.text.trim();
+                                  final newPass = newPasswordController.text;
+                                  final confirmPass = confirmNewPasswordController.text;
+                                  
+                                  if (emailText.isEmpty || mobileText.isEmpty || newPass.isEmpty) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Please fill all fields')),
+                                    );
+                                    return;
+                                  }
+                                  
+                                  if (newPass != confirmPass) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Passwords do not match')),
+                                    );
+                                    return;
+                                  }
+                                  
+                                  final reset = await StorageService.resetPassword(
+                                    email: emailText,
+                                    mobile: mobileText,
+                                    newPassword: newPass,
+                                  );
+                                  
+                                  if (reset) {
+                                    // Update in-memory storage too
+                                    if (_registeredResellers.containsKey(emailText)) {
+                                      _registeredResellers[emailText]!['password'] = newPass;
+                                    }
+                                  }
+                                  
+                                  Navigator.pop(dialogContext, reset);
+                                },
+                                child: const Text('Reset Password'),
+                              ),
+                            ],
+                          ),
+                        );
+                        
+                        if (success == true) {
+                          widget.onMessage('Password reset successful! Please login with new password.');
+                        } else if (success == false) {
+                          widget.onMessage('Email or mobile number does not match our records.');
+                        }
+                      },
                       child: const Text('Forgot Password?'),
                     ),
                   ),
@@ -2993,19 +3312,7 @@ class _AuthPageState extends State<AuthPage> {
                   child: PrimaryButton(
                     label: register ? 'Create Reseller Account' : 'Login',
                     icon: register ? Icons.person_add_alt_1 : Icons.login_rounded,
-                    onPressed: () {
-                      if (register && !agree) {
-                        widget.onMessage(
-                          'Please agree to the terms to continue.',
-                        );
-                      } else {
-                        widget.onMessage(
-                          register
-                              ? 'Registration form is ready to connect.'
-                              : 'Login form is ready to connect.',
-                        );
-                      }
-                    },
+                    onPressed: _submit,
                   ),
                 ),
                 const SizedBox(height: 15),
@@ -3020,17 +3327,6 @@ class _AuthPageState extends State<AuthPage> {
                     ),
                   ),
                 ),
-                if (register)
-                  Center(
-                    child: TextButton.icon(
-                      onPressed: () => widget.onOpen('adminLogin'),
-                      icon: const Icon(Icons.admin_panel_settings_rounded, size: 18),
-                      label: const Text('Admin Login'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: brand,
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
@@ -3074,6 +3370,131 @@ class AdminHome extends StatelessWidget {
                 'Manage your complete Order Management System from one place.',
                 style: TextStyle(color: Colors.white70, height: 1.4),
               ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+        // System Auto-Settle Status Section
+        Panel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    demoOms.settings.systemEnabled 
+                        ? Icons.check_circle_rounded 
+                        : Icons.cancel_rounded,
+                    color: demoOms.settings.systemEnabled ? green : red,
+                    size: 28,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'System Auto-Settle',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        Text(
+                          demoOms.settings.systemEnabled 
+                              ? 'Active - Auto-settling enabled'
+                              : 'Inactive - Manual mode',
+                          style: TextStyle(
+                            color: demoOms.settings.systemEnabled ? green : red,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const Divider(height: 20, color: line),
+              KeyValueRow(
+                'Current Batch',
+                demoOms.currentBatchId,
+                valueColor: brand,
+              ),
+              const Divider(height: 1, color: line),
+              KeyValueRow(
+                'Batch Progress',
+                '৳${demoOms.batchPaidTotal} / ৳${demoOms.currentBatchTarget}',
+                valueColor: demoOms.canSettleCurrentBatch ? green : orange,
+              ),
+              const Divider(height: 1, color: line),
+              KeyValueRow(
+                'Batch Cycle',
+                '${demoOms.settings.cycleHours} Hours',
+              ),
+              const Divider(height: 1, color: line),
+              KeyValueRow(
+                'Auto-Settle Status',
+                demoOms.canSettleCurrentBatch 
+                    ? '✓ Ready to settle'
+                    : 'Waiting for target completion',
+                valueColor: demoOms.canSettleCurrentBatch ? green : muted,
+              ),
+              if (demoOms.settings.systemEnabled && demoOms.canSettleCurrentBatch) ...[
+                const Divider(height: 1, color: line),
+                Container(
+                  margin: const EdgeInsets.only(top: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: green.withOpacity(0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, color: green, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Batch will auto-settle when you visit Batch Management page',
+                          style: TextStyle(
+                            color: Color(0xFF0F7D52),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (!demoOms.settings.systemEnabled) ...[
+                const Divider(height: 1, color: line),
+                Container(
+                  margin: const EdgeInsets.only(top: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: red.withOpacity(0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning_amber_rounded, color: red, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'System is OFF - Enable in Settings to activate auto-settle',
+                          style: TextStyle(
+                            color: Color(0xFFB71C1C),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -3253,7 +3674,7 @@ class _AdminCustomersState extends State<AdminCustomers> {
     super.dispose();
   }
 
-  void _addCustomer() {
+  void _addCustomer() async {
     if (name.text.trim().isEmpty || phone.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Name and mobile number are required.')),
@@ -3277,9 +3698,45 @@ class _AdminCustomersState extends State<AdminCustomers> {
         ),
       ),
     );
+    
+    // Save to persistent storage
+    await StorageService.saveCustomers(demoOms.customers);
+    
     name.clear();
     phone.clear();
     address.clear();
+  }
+
+  Future<void> _confirmDeleteCustomer(DemoCustomer customer) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Customer'),
+        content: Text('Do you want to delete ${customer.name}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: red),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirmed == true && mounted) {
+      setState(() => demoOms.customers.remove(customer));
+      
+      // Save to persistent storage
+      await StorageService.saveCustomers(demoOms.customers);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${customer.name} deleted successfully.')),
+      );
+    }
   }
 
   Future<void> _editCustomer(DemoCustomer customer) async {
@@ -3347,6 +3804,9 @@ class _AdminCustomersState extends State<AdminCustomers> {
       final index = demoOms.customers.indexOf(customer);
       if (index >= 0) {
         setState(() => demoOms.customers[index] = updated);
+        
+        // Save to persistent storage
+        await StorageService.saveCustomers(demoOms.customers);
       }
     } finally {
       editName.dispose();
@@ -3567,9 +4027,7 @@ class _AdminCustomersState extends State<AdminCustomers> {
                       ),
                       IconButton(
                         tooltip: 'Delete customer',
-                        onPressed: () {
-                          setState(() => demoOms.customers.remove(customer));
-                        },
+                        onPressed: () => _confirmDeleteCustomer(customer),
                         icon: const Icon(
                           Icons.delete_outline_rounded,
                           color: red,
@@ -3745,6 +4203,10 @@ class _AdminProductsState extends State<AdminProducts> {
     final index = demoOms.products.indexOf(product);
     if (index < 0) return;
     setState(() => demoOms.products[index] = updated);
+    
+    // Save to persistent storage
+    await StorageService.saveProducts(demoOms.products);
+    
     demoOms.auditLog.insert(0, 'Product "${updated.title}" updated.');
     ScaffoldMessenger.of(context)
         .showSnackBar(const SnackBar(content: Text('Product updated.')));
@@ -3773,6 +4235,10 @@ class _AdminProductsState extends State<AdminProducts> {
     );
     if (!mounted || confirmed != true) return;
     setState(() => demoOms.products.remove(product));
+    
+    // Save to persistent storage
+    await StorageService.saveProducts(demoOms.products);
+    
     demoOms.auditLog.insert(0, 'Product "${product.title}" deleted.');
     ScaffoldMessenger.of(context)
         .showSnackBar(const SnackBar(content: Text('Product deleted.')));
@@ -3875,6 +4341,10 @@ class _AdminProductsState extends State<AdminProducts> {
                       ),
                     ),
                   );
+                  
+                  // Save to persistent storage
+                  StorageService.saveProducts(demoOms.products);
+                  
                   title.clear();
                   category.clear();
                   description.clear();
@@ -4120,10 +4590,6 @@ class _AdminResellersState extends State<AdminResellers> {
   Widget build(BuildContext context) {
     return PageBody(
       children: [
-        const SectionTitle(
-          'Reseller Management',
-          icon: Icons.storefront_rounded,
-        ),
         for (final reseller in demoOms.resellers) ...[
           Builder(
             builder: (context) {
@@ -4689,32 +5155,37 @@ class _AdminOrdersState extends State<AdminOrders> {
                         : 'Pending',
                   ),
                   const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: blue,
-                            side: const BorderSide(color: blue),
-                          ),
-                          onPressed: () => _showOrderDetails(context, order),
-                          child: const Text('View Details'),
-                        ),
-                      ),
-                      if (order.status == DemoOrderStatus.pending) ...[
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: orange,
-                              side: const BorderSide(color: orange),
+                  if (order.status == DemoOrderStatus.pending)
+                    Column(
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: blue,
+                                  side: const BorderSide(color: blue),
+                                ),
+                                onPressed: () => _showOrderDetails(context, order),
+                                child: const Text('View Details'),
+                              ),
                             ),
-                            onPressed: () => _showEditDialog(context, order),
-                            child: const Text('Edit'),
-                          ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: orange,
+                                  side: const BorderSide(color: orange),
+                                ),
+                                onPressed: () => _showEditDialog(context, order),
+                                child: const Text('Edit'),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
                           child: OutlinedButton(
                             style: OutlinedButton.styleFrom(
                               foregroundColor: red,
@@ -4725,8 +5196,19 @@ class _AdminOrdersState extends State<AdminOrders> {
                           ),
                         ),
                       ],
-                    ],
-                  ),
+                    )
+                  else
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: blue,
+                          side: const BorderSide(color: blue),
+                        ),
+                        onPressed: () => _showOrderDetails(context, order),
+                        child: const Text('View Details'),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -5377,6 +5859,16 @@ class _AdminSettingsState extends State<AdminSettings> {
   }
 
   Future<void> _changeAdminEmail() async {
+    // Check if admin is signed in
+    if (widget.auth.currentEmail == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please sign in as admin first to change email address.'),
+        ),
+      );
+      return;
+    }
+    
     var currentPassword = '';
     var newEmail = '';
     final formKey = GlobalKey<FormState>();
@@ -5450,6 +5942,16 @@ class _AdminSettingsState extends State<AdminSettings> {
   }
 
   Future<void> _changeAdminPassword() async {
+    // Check if admin is signed in
+    if (widget.auth.currentEmail == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please sign in as admin first to change password.'),
+        ),
+      );
+      return;
+    }
+    
     var currentPassword = '';
     var newPassword = '';
     var newPasswordInput = '';
@@ -5576,9 +6078,10 @@ class _AdminSettingsState extends State<AdminSettings> {
 
   @override
   Widget build(BuildContext context) {
+    // Calculate next target using current settings from demoOms
     final nextTarget = DemoOmsStore.calculateNextBatchTarget(
       demoOms.currentBatchTarget,
-      int.parse(growth.replaceAll('%', '')),
+      demoOms.settings.growthRate,
     );
     return PageBody(
       children: [
@@ -5769,7 +6272,11 @@ class _AdminSettingsState extends State<AdminSettings> {
         Panel(
           child: Column(
             children: [
-              KeyValueRow('Growth Options', '30 / 40 / 50%'),
+              KeyValueRow(
+                'Growth Rate',
+                '${demoOms.settings.growthRate}%',
+                valueColor: brand,
+              ),
               const Divider(height: 1, color: line),
               const KeyValueRow('Division Unit', '৳50'),
               const Divider(height: 1, color: line),
