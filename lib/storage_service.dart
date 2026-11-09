@@ -8,6 +8,8 @@ class StorageService {
   static const String _customersKey = 'customers_data';
   static const String _productsKey = 'products_data';
   static const String _systemDataKey = 'system_data';
+  static const String _adminEmailKey = 'admin_email';
+  static const String _adminPasswordKey = 'admin_password';
   
   /// Save registered reseller
   static Future<void> saveReseller({
@@ -177,5 +179,78 @@ class StorageService {
     await prefs.remove(_customersKey);
     await prefs.remove(_productsKey);
     // Don't clear resellers - they need to remain registered
+  }
+  
+  /// Delete customer
+  static Future<void> deleteCustomer(String mobile) async {
+    // Load all customers, remove one, save back
+    final customers = await loadCustomers();
+    customers.removeWhere((c) => c.mobile == mobile);
+    await saveCustomers(customers);
+  }
+  
+  /// Delete product
+  static Future<void> deleteProduct(String title) async {
+    // Load all products, remove one, save back
+    final products = await loadProducts();
+    products.removeWhere((p) => p.title == title);
+    await saveProducts(products);
+  }
+  
+  /// Save single customer
+  static Future<void> saveCustomer(DemoCustomer customer) async {
+    // For now, just reload and save all
+    // In production, you'd update individual records
+    await saveCustomers(demoOms.customers);
+  }
+  
+  /// Save single product
+  static Future<void> saveProduct(DemoProduct product) async {
+    // For now, just reload and save all
+    await saveProducts(demoOms.products);
+  }
+  
+  /// Delete reseller
+  static Future<void> deleteReseller(String email) async {
+    final prefs = await SharedPreferences.getInstance();
+    final resellersJson = prefs.getString(_resellersKey) ?? '{}';
+    final resellers = Map<String, dynamic>.from(jsonDecode(resellersJson));
+    resellers.remove(email);
+    await prefs.setString(_resellersKey, jsonEncode(resellers));
+  }
+  
+  /// Update reseller status
+  static Future<void> updateResellerStatus({
+    required String email,
+    required bool active,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final resellersJson = prefs.getString(_resellersKey) ?? '{}';
+    final resellers = Map<String, dynamic>.from(jsonDecode(resellersJson));
+    
+    if (resellers.containsKey(email)) {
+      resellers[email]['active'] = active;
+      await prefs.setString(_resellersKey, jsonEncode(resellers));
+    }
+  }
+  
+  /// Reset reseller password
+  static Future<bool> resetResellerPassword({
+    required String email,
+    required String mobile,
+    required String newPassword,
+  }) async {
+    final resellers = await getResellers();
+    if (!resellers.containsKey(email)) return false;
+    
+    // Verify mobile number matches
+    if (resellers[email]!['mobile'] != mobile) return false;
+    
+    // Update password
+    final prefs = await SharedPreferences.getInstance();
+    resellers[email]!['password'] = newPassword;
+    await prefs.setString(_resellersKey, jsonEncode(resellers));
+    
+    return true;
   }
 }

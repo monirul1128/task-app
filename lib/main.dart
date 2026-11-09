@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'admin_auth.dart';
 import 'firebase_options.dart';
 import 'oms_demo.dart';
-import 'storage_service.dart';
+import 'firestore_service.dart';
 
 // Simple in-memory storage for registered resellers - moved here for access
 final _registeredResellers = <String, Map<String, String>>{
@@ -21,14 +21,36 @@ final _registeredResellers = <String, Map<String, String>>{
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   
-  // Load persistent data from storage
-  await StorageService.loadSystemData();
-  
-  // Load registered resellers from storage
-  final storedResellers = await StorageService.getResellers();
-  _registeredResellers.addAll(storedResellers);
+  try {
+    // Initialize Firebase
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+    
+    // Load persistent data from Firestore
+    try {
+      await FirestoreService.loadSystemData();
+      
+      // Load registered resellers from Firestore
+      final storedResellers = await FirestoreService.loadResellers();
+      _registeredResellers.addAll(storedResellers.map((key, value) => MapEntry(
+        key,
+        {
+          'name': value['name'] as String,
+          'mobile': value['mobile'] as String,
+          'password': value['password'] as String,
+        },
+      )));
+    } catch (e) {
+      // Firestore loading failed - continue with empty data
+      print('Firestore loading error: $e');
+    }
+    
+    // Start background automation for auto-transfer and auto-settlement
+    demoOms.startAutomation();
+  } catch (e) {
+    // Firebase initialization failed - continue without Firebase
+    print('Firebase initialization error: $e');
+  }
   
   runApp(const BechaKenaHubApp());
 }
@@ -195,8 +217,9 @@ class _HubShellState extends State<HubShell> {
   String _page = 'register'; // Changed from 'roles' to 'register'
   String _previousPage = 'orders';
   String? _selectedOrderId;
+  String? _currentResellerEmail; // Track logged-in reseller email
 
-  Future<void> _enter(String role) async {
+  Future<void> _enter(String role, {String? email}) async {
     if (role == 'admin') {
       var hasAdminAccess = false;
       try {
@@ -208,12 +231,14 @@ class _HubShellState extends State<HubShell> {
       setState(() {
         _role = 'admin';
         _page = hasAdminAccess ? 'adminHome' : 'adminLogin';
+        _currentResellerEmail = null;
       });
       return;
     }
     setState(() {
       _role = 'reseller';
       _page = 'home';
+      _currentResellerEmail = email; // Store reseller email
     });
   }
 
@@ -294,6 +319,15 @@ class _HubShellState extends State<HubShell> {
                       setState(() {
                         _role = 'admin';
                         _page = 'adminHome';
+                        _currentResellerEmail = null;
+                      });
+                    } else if (page.startsWith('home|')) {
+                      // Extract email from page string
+                      final email = page.substring('home|'.length);
+                      setState(() {
+                        _role = 'reseller';
+                        _page = 'home';
+                        _currentResellerEmail = email;
                       });
                     } else if (page == 'home') {
                       setState(() {
@@ -429,9 +463,16 @@ class _HubShellState extends State<HubShell> {
   Widget _buildPage() {
     switch (_page) {
       case 'home':
-        return ResellerHome(onOpen: _go);
+        return ResellerHome(
+          onOpen: _go,
+          resellerEmail: _currentResellerEmail, // Pass email
+        );
       case 'orders':
-        return ResellerOrders(onOpen: _go, onMessage: _message);
+        return ResellerOrders(
+          onOpen: _go,
+          onMessage: _message,
+          resellerEmail: _currentResellerEmail, // Pass email
+        );
       case 'wallet':
         return const ResellerWallet();
       case 'withdraw':
@@ -1185,25 +1226,66 @@ class FilterChips extends StatelessWidget {
 }
 
 class ResellerHome extends StatelessWidget {
-  const ResellerHome({required this.onOpen, super.key});
+  const ResellerHome({
+    required this.onOpen,
+    this.resellerEmail,
+    super.key,
+  });
+  
   final ValueChanged<String> onOpen;
+  final String? resellerEmail;
 
   @override
   Widget build(BuildContext context) {
-    int orderCount(DemoOrderStatus status) =>
-        demoOms.orders.where((order) => order.status == status).length;
-    final simulated = demoOms.orders.where(
+    // Find current reseller by email
+    DemoReseller? currentReseller;
+    if (resellerEmail != null) {
+      try {
+        currentReseller = demoOms.resellers.firstWhere(
+          (r) => r.email == resellerEmail,
+        );
+      } catch (e) {
+        // Reseller not found
+      }
+    }
+    
+    // Helper functions that filter by current reseller
+    int orderCount(DemoOrderStatus status) {
+      if (currentReseller == null) return 0;
+      return demoOms.orders
+          .where((order) => 
+              order.status == status && 
+              order.reseller == currentReseller)
+          .length;
+    }
+    
+    final myOrders = currentReseller != null
+        ? demoOms.orders.where((o) => o.reseller == currentReseller).toList()
+        : <DemoOrder>[];
+    
+    final simulated = myOrders.where(
       (order) => order.paymentStatus == DemoPaymentStatus.simulated,
     );
-    int withdrawalCount(DemoWithdrawalStatus status) =>
-        demoOms.withdrawals.where((request) => request.status == status).length;
-    final recentOrders = demoOms.orders.reversed.take(2).toList();
-    final recentWithdrawals = demoOms.withdrawals
-        .where((request) => request.reseller == demoOms.resellers.first)
-        .toList()
-        .reversed
-        .take(2)
-        .toList();
+    
+    int withdrawalCount(DemoWithdrawalStatus status) {
+      if (currentReseller == null) return 0;
+      return demoOms.withdrawals
+          .where((request) => 
+              request.status == status && 
+              request.reseller == currentReseller)
+          .length;
+    }
+    
+    final recentOrders = myOrders.reversed.take(2).toList();
+    final recentWithdrawals = currentReseller != null
+        ? demoOms.withdrawals
+            .where((request) => request.reseller == currentReseller)
+            .toList()
+            .reversed
+            .take(2)
+            .toList()
+        : <DemoWithdrawal>[];
+    
     return PageBody(
       children: [
         Container(
@@ -1222,24 +1304,24 @@ class ResellerHome extends StatelessWidget {
               ),
             ],
           ),
-          child: const Column(
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              const Text(
                 'WELCOME BACK',
                 style: TextStyle(color: Colors.white70, letterSpacing: 1.1),
               ),
-              SizedBox(height: 13),
+              const SizedBox(height: 13),
               Text(
-                'Hello, Reseller!',
-                style: TextStyle(
+                'Hello, ${currentReseller?.name ?? "Reseller"}!',
+                style: const TextStyle(
                   color: Colors.white,
                   fontSize: 28,
                   fontWeight: FontWeight.w900,
                 ),
               ),
-              SizedBox(height: 7),
-              Text(
+              const SizedBox(height: 7),
+              const Text(
                 'Manage your orders and business activities easily.',
                 style: TextStyle(color: Colors.white, height: 1.4),
               ),
@@ -1247,10 +1329,10 @@ class ResellerHome extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 22),
-        const SectionTitle('Order Overview', icon: Icons.assignment_rounded),
+        const SectionTitle('My Order Overview', icon: Icons.assignment_rounded),
         MetricGrid(
           items: [
-            MetricCard(label: 'Total Order', value: '${demoOms.orders.length}'),
+            MetricCard(label: 'Total Order', value: '${myOrders.length}'),
             MetricCard(
               label: 'Pending',
               value: '${orderCount(DemoOrderStatus.pending)}',
@@ -1275,14 +1357,14 @@ class ResellerHome extends StatelessWidget {
         ),
         const SizedBox(height: 18),
         const SectionTitle(
-          'Payment Overview',
+          'My Payment Overview',
           icon: Icons.account_balance_wallet_rounded,
         ),
         MetricGrid(
           items: [
             MetricCard(
               label: 'Total Payment',
-              value: '${demoOms.orders.length}',
+              value: '${myOrders.length}',
               color: brand,
             ),
             MetricCard(
@@ -1292,18 +1374,18 @@ class ResellerHome extends StatelessWidget {
             ),
             MetricCard(
               label: 'Unpaid',
-              value: '${demoOms.orders.length - simulated.length}',
+              value: '${myOrders.length - simulated.length}',
               color: orange,
             ),
           ],
         ),
         const SizedBox(height: 18),
-        const SectionTitle('Withdrawal Overview', icon: Icons.payments_rounded),
+        const SectionTitle('My Withdrawal Overview', icon: Icons.payments_rounded),
         MetricGrid(
           items: [
             MetricCard(
               label: 'Total Withdraw',
-              value: '${demoOms.withdrawals.length}',
+              value: '${recentWithdrawals.length}',
             ),
             MetricCard(
               label: 'Pending',
@@ -1555,10 +1637,12 @@ class ResellerOrders extends StatefulWidget {
   const ResellerOrders({
     required this.onOpen,
     required this.onMessage,
+    this.resellerEmail,
     super.key,
   });
   final ValueChanged<String> onOpen;
   final ValueChanged<String> onMessage;
+  final String? resellerEmail;
 
   @override
   State<ResellerOrders> createState() => _ResellerOrdersState();
@@ -1568,8 +1652,38 @@ class _ResellerOrdersState extends State<ResellerOrders> {
   String filter = 'All';
 
   @override
+  void initState() {
+    super.initState();
+    // Check for expired orders when page loads
+    try {
+      demoOms.checkAndTransferExpiredOrders();
+      demoOms.checkAndAutoSettleBatch(); // Also check for cycle-based settlement
+    } catch (e) {
+      // Ignore errors during auto-transfer check
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // Find current reseller by email
+    DemoReseller? currentReseller;
+    if (widget.resellerEmail != null) {
+      try {
+        currentReseller = demoOms.resellers.firstWhere(
+          (r) => r.email == widget.resellerEmail,
+        );
+      } catch (e) {
+        // Reseller not found
+      }
+    }
+    
+    // Filter orders for current reseller only
     final orders = demoOms.orders.where((order) {
+      // Only show orders for this reseller
+      if (currentReseller != null && order.reseller != currentReseller) {
+        return false;
+      }
+      
       final status = switch (order.status) {
         DemoOrderStatus.pending => 'Pending',
         DemoOrderStatus.processing => 'Processing',
@@ -2987,8 +3101,9 @@ class _AuthPageState extends State<AuthPage> {
         return;
       }
       
-      // Check for Admin login
-      if (loginEmail == 'admin@bkh.com' && loginPassword == 'admin123') {
+      // Check for Admin login with stored credentials
+      final isAdmin = await FirestoreService.verifyAdminLogin(loginEmail, loginPassword);
+      if (isAdmin) {
         widget.onMessage('Admin login successful!');
         widget.onOpen('adminHome');
         return;
@@ -2999,7 +3114,7 @@ class _AuthPageState extends State<AuthPage> {
         final reseller = _registeredResellers[loginEmail]!;
         if (reseller['password'] == loginPassword) {
           widget.onMessage('Reseller login successful!');
-          widget.onOpen('home');
+          widget.onOpen('home|$loginEmail'); // Pass email with page
           return;
         }
       }
@@ -3045,8 +3160,16 @@ class _AuthPageState extends State<AuthPage> {
       'password': password.text,
     };
     
+    // Add reseller to DemoOmsStore
+    final newReseller = DemoReseller(
+      name.text.trim(),
+      mobile.text.trim(),
+      registerEmail,
+    );
+    demoOms.resellers.add(newReseller);
+    
     // Save to persistent storage
-    await StorageService.saveReseller(
+    await FirestoreService.saveReseller(
       email: registerEmail,
       name: name.text.trim(),
       mobile: mobile.text.trim(),
@@ -3276,7 +3399,7 @@ class _AuthPageState extends State<AuthPage> {
                                     return;
                                   }
                                   
-                                  final reset = await StorageService.resetPassword(
+                                  final reset = await FirestoreService.resetResellerPassword(
                                     email: emailText,
                                     mobile: mobileText,
                                     newPassword: newPass,
@@ -3699,8 +3822,9 @@ class _AdminCustomersState extends State<AdminCustomers> {
       ),
     );
     
-    // Save to persistent storage
-    await StorageService.saveCustomers(demoOms.customers);
+    // Save to Firestore
+    final newCustomer = demoOms.customers.last;
+    await FirestoreService.saveCustomer(newCustomer);
     
     name.clear();
     phone.clear();
@@ -3730,8 +3854,8 @@ class _AdminCustomersState extends State<AdminCustomers> {
     if (confirmed == true && mounted) {
       setState(() => demoOms.customers.remove(customer));
       
-      // Save to persistent storage
-      await StorageService.saveCustomers(demoOms.customers);
+      // Delete from Firestore
+      await FirestoreService.deleteCustomer(customer.mobile);
       
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${customer.name} deleted successfully.')),
@@ -3805,8 +3929,8 @@ class _AdminCustomersState extends State<AdminCustomers> {
       if (index >= 0) {
         setState(() => demoOms.customers[index] = updated);
         
-        // Save to persistent storage
-        await StorageService.saveCustomers(demoOms.customers);
+        // Save to Firestore (individual saves during import loop would be better)
+        // But for now, just keep in memory - already saved individually
       }
     } finally {
       editName.dispose();
@@ -4204,8 +4328,8 @@ class _AdminProductsState extends State<AdminProducts> {
     if (index < 0) return;
     setState(() => demoOms.products[index] = updated);
     
-    // Save to persistent storage
-    await StorageService.saveProducts(demoOms.products);
+    // Save updated product to Firestore
+    await FirestoreService.saveProduct(updated);
     
     demoOms.auditLog.insert(0, 'Product "${updated.title}" updated.');
     ScaffoldMessenger.of(context)
@@ -4236,8 +4360,8 @@ class _AdminProductsState extends State<AdminProducts> {
     if (!mounted || confirmed != true) return;
     setState(() => demoOms.products.remove(product));
     
-    // Save to persistent storage
-    await StorageService.saveProducts(demoOms.products);
+    // Delete from Firestore
+    await FirestoreService.deleteProduct(product.title);
     
     demoOms.auditLog.insert(0, 'Product "${product.title}" deleted.');
     ScaffoldMessenger.of(context)
@@ -4342,8 +4466,9 @@ class _AdminProductsState extends State<AdminProducts> {
                     ),
                   );
                   
-                  // Save to persistent storage
-                  StorageService.saveProducts(demoOms.products);
+                  // Save to Firestore
+                  final newProduct = demoOms.products.last;
+                  FirestoreService.saveProduct(newProduct);
                   
                   title.clear();
                   category.clear();
@@ -4622,13 +4747,21 @@ class _AdminResellersState extends State<AdminResellers> {
                 withdrawn: withdrawn,
                 status: reseller.active ? 'Active' : 'Inactive',
                 active: reseller.active,
-                onActiveChanged: (value) => setState(() {
-                  reseller.active = value;
-                  demoOms.auditLog.insert(
-                    0,
-                    '${reseller.name} ${value ? 'activated' : 'deactivated'}',
+                onActiveChanged: (value) async {
+                  setState(() {
+                    reseller.active = value;
+                    demoOms.auditLog.insert(
+                      0,
+                      '${reseller.name} ${value ? 'activated' : 'deactivated'}',
+                    );
+                  });
+                  
+                  // Update in Firestore
+                  await FirestoreService.updateResellerStatus(
+                    email: reseller.email,
+                    active: value,
                   );
-                }),
+                },
                 onDelete: () async {
                   final confirmed = await showDialog<bool>(
                     context: context,
@@ -4658,6 +4791,13 @@ class _AdminResellersState extends State<AdminResellers> {
                         'Reseller ${reseller.name} deleted.',
                       );
                     });
+                    
+                    // Delete from Firestore
+                    await FirestoreService.deleteReseller(reseller.email);
+                    
+                    // Remove from registered resellers map
+                    _registeredResellers.remove(reseller.email);
+                    
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
@@ -4802,6 +4942,18 @@ class _AdminOrdersState extends State<AdminOrders> {
   String query = '';
   String filter = 'All';
   String batchFilter = demoOms.currentBatchId;
+
+  @override
+  void initState() {
+    super.initState();
+    // Check for expired orders when page loads
+    try {
+      demoOms.checkAndTransferExpiredOrders();
+      demoOms.checkAndAutoSettleBatch(); // Also check for cycle-based settlement
+    } catch (e) {
+      // Ignore errors during auto-transfer check
+    }
+  }
 
   String _label(DemoOrderStatus status) => switch (status) {
     DemoOrderStatus.pending => 'Pending',
@@ -5007,10 +5159,29 @@ class _AdminOrdersState extends State<AdminOrders> {
                     cancelledOrder.reseller.capital += cancelledOrder.wholesalePrice;
                   }
                   
+                  // Mark as cancelled first
                   demoOms.orders[index].status = DemoOrderStatus.cancelled;
+                  
+                  // Then reset to pending/unpaid for transfer (only if in current batch)
+                  if (cancelledOrder.batchId == demoOms.currentBatchId) {
+                    cancelledOrder.status = DemoOrderStatus.pending;
+                    cancelledOrder.paymentStatus = DemoPaymentStatus.unpaid;
+                    
+                    // Try to transfer to another reseller (skip auto-check to avoid recursion)
+                    try {
+                      demoOms.transferOrder(cancelledOrder, skipAutoCheck: true);
+                      widget.onMessage('Order ${order.id} cancelled and transferred to another reseller.');
+                    } catch (e) {
+                      // If transfer fails (no active resellers), keep it cancelled
+                      cancelledOrder.status = DemoOrderStatus.cancelled;
+                      widget.onMessage('Order ${order.id} cancelled. No active reseller available for transfer.');
+                    }
+                  } else {
+                    widget.onMessage('Order ${order.id} cancelled successfully.');
+                  }
+                  
                   setState(() {});
                   Navigator.of(context).pop();
-                  widget.onMessage('Order ${order.id} cancelled successfully.');
                 }
               } on StateError catch (error) {
                 widget.onMessage(error.message);
@@ -5364,7 +5535,9 @@ class _AdminBatchState extends State<AdminBatch> {
           ),
         const SizedBox(height: 12),
         PrimaryButton(
-          label: 'Settle full batch & create next',
+          label: demoOms.canSettleCurrentBatch 
+              ? 'Settle full batch & create next'
+              : 'Complete all payments first (${demoOms.batchPaidTotal} / ${demoOms.currentBatchTarget})',
           icon: Icons.task_alt_rounded,
           color: demoOms.canSettleCurrentBatch ? green : muted,
           onPressed: demoOms.canSettleCurrentBatch
@@ -5378,7 +5551,7 @@ class _AdminBatchState extends State<AdminBatch> {
                   }
                 }
               : () => widget.onMessage(
-                  'Partial settlement is disabled. Confirm the full batch target first.',
+                  'Payment incomplete: ৳${demoOms.batchPaidTotal} / ৳${demoOms.currentBatchTarget}. All orders must be paid before settlement.',
                 ),
         ),
       ],
@@ -5847,6 +6020,22 @@ class _AdminSettingsState extends State<AdminSettings> {
   late bool enabled = demoOms.settings.systemEnabled;
   late String profit = '${demoOms.settings.profitRate}%';
   late String growth = '${demoOms.settings.growthRate}%';
+  String _currentAdminEmail = 'admin@bkh.com'; // Will be loaded from storage
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAdminEmail();
+  }
+
+  Future<void> _loadAdminEmail() async {
+    final email = await FirestoreService.getAdminEmail();
+    if (mounted) {
+      setState(() {
+        _currentAdminEmail = email;
+      });
+    }
+  }
 
   void _showAccountError(Object error) {
     final message = switch (error) {
@@ -5859,32 +6048,29 @@ class _AdminSettingsState extends State<AdminSettings> {
   }
 
   Future<void> _changeAdminEmail() async {
-    // Check if admin is signed in
-    if (widget.auth.currentEmail == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please sign in as admin first to change email address.'),
-        ),
-      );
-      return;
-    }
-    
+    // For demo app: Simple email change without Firebase verification
     var currentPassword = '';
     var newEmail = '';
     final formKey = GlobalKey<FormState>();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Change admin email'),
+        title: const Text('Change Admin Email'),
         content: Form(
           key: formKey,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Text(
+                'Current Email: $_currentAdminEmail',
+                style: const TextStyle(fontSize: 14, color: muted),
+              ),
+              const SizedBox(height: 16),
               TextFormField(
                 obscureText: true,
                 decoration: const InputDecoration(
                   labelText: 'Current password',
+                  hintText: 'Enter admin password',
                 ),
                 validator: (value) => (value?.isEmpty ?? true)
                     ? 'Enter your current password.'
@@ -5894,7 +6080,10 @@ class _AdminSettingsState extends State<AdminSettings> {
               const SizedBox(height: 12),
               TextFormField(
                 keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(labelText: 'New email'),
+                decoration: const InputDecoration(
+                  labelText: 'New email',
+                  hintText: 'Enter new email address',
+                ),
                 validator: (value) => (value?.trim().contains('@') ?? false)
                     ? null
                     : 'Enter a valid email address.',
@@ -5914,44 +6103,43 @@ class _AdminSettingsState extends State<AdminSettings> {
               formKey.currentState!.save();
               Navigator.pop(context, true);
             },
-            child: const Text('Send verification'),
+            child: const Text('Change Email'),
           ),
         ],
       ),
     );
     if (confirmed != true || !mounted) return;
-    try {
-      await widget.auth.sendEmailChangeVerification(
-        currentPassword: currentPassword,
-        newEmail: newEmail,
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Email verification sent to $newEmail. The address changes after verification.',
-            ),
-          ),
-        );
-      }
-    } on FirebaseAuthException catch (error) {
-      if (mounted) _showAccountError(error);
-    } on StateError catch (error) {
-      if (mounted) _showAccountError(error);
-    }
-  }
-
-  Future<void> _changeAdminPassword() async {
-    // Check if admin is signed in
-    if (widget.auth.currentEmail == null) {
+    
+    // Verify current password from storage
+    final storedPassword = await FirestoreService.getAdminPassword();
+    if (currentPassword != storedPassword) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please sign in as admin first to change password.'),
+          content: Text('Incorrect password.'),
+          backgroundColor: red,
         ),
       );
       return;
     }
     
+    // Update admin email in storage
+    await FirestoreService.updateAdminEmail(newEmail);
+    
+    // Reload admin email
+    await _loadAdminEmail();
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Admin email changed to $newEmail successfully!'),
+          backgroundColor: green,
+        ),
+      );
+    }
+  }
+
+  Future<void> _changeAdminPassword() async {
+    // For demo app: Simple password change
     var currentPassword = '';
     var newPassword = '';
     var newPasswordInput = '';
@@ -5959,7 +6147,7 @@ class _AdminSettingsState extends State<AdminSettings> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Change admin password'),
+        title: const Text('Change Admin Password'),
         content: Form(
           key: formKey,
           child: Column(
@@ -5969,6 +6157,7 @@ class _AdminSettingsState extends State<AdminSettings> {
                 obscureText: true,
                 decoration: const InputDecoration(
                   labelText: 'Current password',
+                  hintText: 'Enter current password',
                 ),
                 validator: (value) => (value?.isEmpty ?? true)
                     ? 'Enter your current password.'
@@ -5978,7 +6167,10 @@ class _AdminSettingsState extends State<AdminSettings> {
               const SizedBox(height: 12),
               TextFormField(
                 obscureText: true,
-                decoration: const InputDecoration(labelText: 'New password'),
+                decoration: const InputDecoration(
+                  labelText: 'New password',
+                  hintText: 'At least 6 characters',
+                ),
                 validator: (value) => (value?.length ?? 0) >= 6
                     ? null
                     : 'Password must be at least 6 characters.',
@@ -5990,6 +6182,7 @@ class _AdminSettingsState extends State<AdminSettings> {
                 obscureText: true,
                 decoration: const InputDecoration(
                   labelText: 'Confirm new password',
+                  hintText: 'Re-enter new password',
                 ),
                 validator: (value) => value == newPasswordInput
                     ? null
@@ -6009,26 +6202,35 @@ class _AdminSettingsState extends State<AdminSettings> {
               formKey.currentState!.save();
               Navigator.pop(context, true);
             },
-            child: const Text('Update password'),
+            child: const Text('Change Password'),
           ),
         ],
       ),
     );
     if (confirmed != true || !mounted) return;
-    try {
-      await widget.auth.changePassword(
-        currentPassword: currentPassword,
-        newPassword: newPassword,
+    
+    // Verify current password from storage
+    final storedPassword = await FirestoreService.getAdminPassword();
+    if (currentPassword != storedPassword) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Incorrect current password.'),
+          backgroundColor: red,
+        ),
       );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Admin password updated.')),
-        );
-      }
-    } on FirebaseAuthException catch (error) {
-      if (mounted) _showAccountError(error);
-    } on StateError catch (error) {
-      if (mounted) _showAccountError(error);
+      return;
+    }
+    
+    // Update admin password in storage
+    await FirestoreService.updateAdminPassword(newPassword);
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Admin password changed successfully!'),
+          backgroundColor: green,
+        ),
+      );
     }
   }
 

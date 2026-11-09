@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:excel/excel.dart';
 
 enum DemoOrderStatus { pending, processing, delivered, cancelled }
@@ -60,7 +61,8 @@ class DemoOrder {
     required this.reseller,
     required this.wholesalePrice,
     required this.retailPrice,
-  });
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
 
   final String id;
   final String batchId;
@@ -72,6 +74,7 @@ class DemoOrder {
   DemoOrderStatus status = DemoOrderStatus.pending;
   DemoPaymentStatus paymentStatus = DemoPaymentStatus.unpaid;
   int transferNumber = 0;
+  final DateTime createdAt; // Timestamp for transfer period tracking
 
   int get profit => retailPrice - wholesalePrice;
 }
@@ -95,19 +98,21 @@ class DemoWithdrawal {
 }
 
 class DemoBatch {
-  const DemoBatch({
+  DemoBatch({
     required this.id,
     required this.target,
     required this.division,
     this.previousTarget,
     this.growthRate,
-  });
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
 
   final String id;
   final int target;
   final List<int> division;
   final int? previousTarget;
   final int? growthRate;
+  final DateTime createdAt; // Timestamp for cycle period tracking
 }
 
 class DemoWalletEntry {
@@ -128,27 +133,32 @@ class DemoWalletEntry {
 
 class DemoOmsStore {
   DemoOmsStore() {
-    // Load initial demo data on first launch
-    _seedInitialData();
-    
-    // Start with demo data - Admin can add more or reset system
-    // Only create the initial batch if we have the minimum required data
-    try {
-      if (customers.isNotEmpty && products.isNotEmpty && activeResellers.isNotEmpty) {
-        createNextBatch(initial: true);
-      }
-    } catch (e) {
-      // Ignore errors during initialization
-      // Admin will set up data and create first batch manually
-    }
+    // Start with empty data - Admin will add customers, products, resellers
+    // DO NOT load demo data automatically - only on reset
   }
 
   void _seedInitialData() {
-    // This method is now only used for "Reset System" functionality
+    // This method is used for "Reset System" functionality only
     // Clear all existing data first
     customers.clear();
     products.clear();
     resellers.clear();
+    orders.clear();
+    batches.clear();
+    withdrawals.clear();
+    walletEntries.clear();
+    settledBatchIds.clear();
+    auditLog.clear();
+    
+    // Reset counters
+    currentBatchId = 'B-001';
+    currentBatchTarget = settings.initialBatchTarget;
+    _nextOrderNumber = 1001;
+    _nextWithdrawalNumber = 5001;
+    _nextTransactionNumber = 1;
+    _customerCursor = 0;
+    _productCursor = 0;
+    _resellerCursor = 0;
     
     // Add demo data
     customers.addAll(const [
@@ -188,6 +198,8 @@ class DemoOmsStore {
         active: false,
       ),
     ]);
+    
+    auditLog.add('System reset with demo data.');
   }
 
   final settings = DemoSettings();
@@ -203,6 +215,9 @@ class DemoOmsStore {
   ];
   final settledBatchIds = <String>{};
 
+  // Background automation timer
+  Timer? _automationTimer;
+  
   String currentBatchId = 'B-001';
   int currentBatchTarget = 500;
   int _nextOrderNumber = 1001;
@@ -211,6 +226,41 @@ class DemoOmsStore {
   int _customerCursor = 0;
   int _productCursor = 0;
   int _resellerCursor = 0;
+
+  // Start background automation (call this after app initialization)
+  void startAutomation() {
+    // Check every 1 minute for expired orders and cycle completion
+    // This ensures timely auto-transfer and auto-settlement
+    _automationTimer?.cancel(); // Cancel any existing timer
+    _automationTimer = Timer.periodic(
+      const Duration(minutes: 1), // Check every minute for responsiveness
+      (timer) {
+        if (settings.systemEnabled) {
+          try {
+            // Check for expired orders (transfer period)
+            checkAndTransferExpiredOrders();
+            
+            // Check for cycle completion (settlement period)
+            checkAndAutoSettleBatch();
+          } catch (e) {
+            auditLog.insert(
+              0,
+              'Background automation error: ${e.toString()}',
+            );
+          }
+        }
+      },
+    );
+    
+    auditLog.insert(0, 'Background automation started (checks every 1 minute).');
+  }
+  
+  // Stop background automation
+  void stopAutomation() {
+    _automationTimer?.cancel();
+    _automationTimer = null;
+    auditLog.insert(0, 'Background automation stopped.');
+  }
 
   List<DemoReseller> get activeResellers =>
       resellers.where((reseller) => reseller.active).toList();
@@ -476,31 +526,114 @@ class DemoOmsStore {
   }
 
   void confirmPayment(DemoOrder order) {
-    _requireCurrentOpenOrder(order);
+    // Find and update only the specific order, not all orders
+    final orderIndex = orders.indexWhere((o) => o.id == order.id);
+    if (orderIndex == -1) {
+      throw StateError('Order ${order.id} not found.');
+    }
+    
+    final targetOrder = orders[orderIndex];
+    
+    if (targetOrder.batchId != currentBatchId) {
+      throw StateError(
+        'This order belongs to batch ${targetOrder.batchId}, not the current open batch $currentBatchId.',
+      );
+    }
     if (!settings.systemEnabled) {
       throw StateError(
         'The system is off; new order confirmations are disabled.',
       );
     }
-    if (order.status != DemoOrderStatus.pending ||
-        order.paymentStatus != DemoPaymentStatus.unpaid) {
+    if (targetOrder.status != DemoOrderStatus.pending ||
+        targetOrder.paymentStatus != DemoPaymentStatus.unpaid) {
       throw StateError(
         'This order is no longer awaiting payment confirmation.',
       );
     }
-    order.paymentStatus = DemoPaymentStatus.simulated;
-    order.status = DemoOrderStatus.processing;
+    
+    // Update only this specific order
+    targetOrder.paymentStatus = DemoPaymentStatus.simulated;
+    targetOrder.status = DemoOrderStatus.processing;
+    
     auditLog.insert(
       0,
-      'DEMO ONLY: ${order.id} marked paid by simulated confirmation; no provider transaction verified.',
+      'DEMO ONLY: ${targetOrder.id} marked paid by simulated confirmation; no provider transaction verified.',
     );
+    
+    // Check if current batch is now complete and trigger auto-settlement
+    if (batchOrderTotal == currentBatchTarget &&
+        batchPaidTotal == currentBatchTarget) {
+      try {
+        settleCurrentBatch();
+        auditLog.insert(
+          0,
+          'Auto-settlement triggered: current batch completed with payment of ${targetOrder.id}.',
+        );
+      } catch (e) {
+        auditLog.insert(
+          0,
+          'Auto-settlement check after payment: ${e.toString()}',
+        );
+      }
+    }
   }
 
-  void transferOrder(DemoOrder order) {
+  void transferOrder(DemoOrder order, {bool skipAutoCheck = false}) {
     _requireCurrentOpenOrder(order);
     if (!settings.systemEnabled) {
       throw StateError('The system is off; order transfers are paused.');
     }
+    
+    // Use internal transfer method
+    _transferOrderDirect(order);
+    
+    // After manual transfer, check for other expired orders (unless skipped)
+    if (!skipAutoCheck) {
+      checkAndTransferExpiredOrders();
+    }
+  }
+
+  // Check and automatically transfer orders that exceeded transfer period
+  void checkAndTransferExpiredOrders() {
+    if (!settings.systemEnabled) {
+      return; // System is off, don't auto-transfer
+    }
+    
+    final now = DateTime.now();
+    final transferDuration = Duration(hours: settings.transferHours);
+    
+    // Find all pending unpaid orders that exceeded transfer period
+    final expiredOrders = orders.where((order) {
+      return order.status == DemoOrderStatus.pending &&
+             order.paymentStatus == DemoPaymentStatus.unpaid &&
+             order.batchId == currentBatchId &&
+             now.difference(order.createdAt) >= transferDuration;
+    }).toList();
+    
+    // Transfer each expired order (without recursion)
+    for (final order in expiredOrders) {
+      try {
+        // Direct transfer without calling checkAndTransferExpiredOrders again
+        _transferOrderDirect(order);
+      } catch (e) {
+        // If transfer fails (e.g., no active resellers), skip this order
+        auditLog.insert(
+          0,
+          'Auto-transfer failed for ${order.id}: ${e.toString()}',
+        );
+      }
+    }
+    
+    if (expiredOrders.isNotEmpty) {
+      auditLog.insert(
+        0,
+        'Auto-transferred ${expiredOrders.length} expired orders after ${settings.transferHours}h.',
+      );
+    }
+  }
+
+  // Internal transfer method without auto-check (prevents recursion)
+  void _transferOrderDirect(DemoOrder order) {
     if (order.status != DemoOrderStatus.pending) {
       throw StateError('Only an unpaid pending order can be transferred.');
     }
@@ -515,65 +648,136 @@ class DemoOmsStore {
     if (active.length > 1 && identical(active[nextIndex], order.reseller)) {
       nextIndex = (nextIndex + 1) % active.length;
     }
+    
+    final previousReseller = order.reseller.name;
     order.reseller = active[nextIndex];
     _resellerCursor = nextIndex + 1;
+    
     auditLog.insert(
       0,
-      '${order.id} transferred to ${order.reseller.name} (transfer ${order.transferNumber}).',
+      '${order.id} transferred from $previousReseller to ${order.reseller.name} (transfer ${order.transferNumber}).',
     );
   }
 
+  // Check if cycle period has passed and auto-settle if needed
+  void checkAndAutoSettleBatch() {
+    if (!settings.systemEnabled) {
+      return; // System is off
+    }
+    
+    // Find current batch
+    final currentBatch = batches.firstWhere(
+      (b) => b.id == currentBatchId,
+      orElse: () => throw StateError('Current batch not found'),
+    );
+    
+    final now = DateTime.now();
+    final cycleDuration = Duration(hours: settings.cycleHours);
+    
+    // Check if cycle period has passed
+    if (now.difference(currentBatch.createdAt) >= cycleDuration) {
+      // Check if current batch is fully paid
+      if (batchOrderTotal == currentBatchTarget &&
+          batchPaidTotal == currentBatchTarget) {
+        try {
+          // Auto-settle previous batch and create next batch
+          settleCurrentBatch();
+          auditLog.insert(
+            0,
+            'Auto-settlement triggered after ${settings.cycleHours}h cycle period.',
+          );
+        } catch (e) {
+          auditLog.insert(
+            0,
+            'Auto-settlement failed: ${e.toString()}',
+          );
+        }
+      }
+    }
+  }
+
   bool settleCurrentBatch() {
+    // NEW LOGIC: Settle the PREVIOUS batch when current batch completes
+    // When current batch is fully paid, settle previous batch and create next batch
+    
     if (!settings.systemEnabled) {
       throw StateError(
         'Turn the system on before settling and creating the next batch.',
       );
     }
-    if (settledBatchIds.contains(currentBatchId)) {
-      throw StateError('This batch has already been settled.');
-    }
+    
+    // Check if current batch is fully paid
     if (batchOrderTotal != currentBatchTarget ||
         batchPaidTotal != currentBatchTarget) {
       throw StateError(
         'Full settlement is unavailable until all ৳$currentBatchTarget of this batch are paid.',
       );
     }
-    final nextTarget = calculateNextBatchTarget(
-      currentBatchTarget,
-      settings.growthRate,
-    );
-    final nextDivision = divideTarget(nextTarget);
-    if (nextDivision.isEmpty ||
-        products.isEmpty ||
-        customers.isEmpty ||
-        activeResellers.isEmpty) {
-      throw StateError(
-        nextDivision.isEmpty
-            ? 'The next target ৳$nextTarget cannot be divided into consecutive ৳50 multiples.'
-            : products.isEmpty
-            ? 'Add at least one product before creating the next batch.'
-            : customers.isEmpty
-            ? 'Add at least one customer before creating the next batch.'
-            : 'At least one active reseller is required for the next batch.',
-      );
+    
+    // Find previous batch to settle (the one before current)
+    final currentBatchIndex = batches.indexWhere((b) => b.id == currentBatchId);
+    if (currentBatchIndex == -1) {
+      throw StateError('Current batch not found.');
     }
-    final batchId = currentBatchId;
+    
+    // If this is the first batch (B-001), settle it directly
+    String batchToSettle;
+    if (currentBatchIndex == 0) {
+      // First batch - settle current batch
+      batchToSettle = currentBatchId;
+    } else {
+      // Find previous batch that hasn't been settled yet
+      String? previousBatchId;
+      for (int i = currentBatchIndex - 1; i >= 0; i--) {
+        if (!settledBatchIds.contains(batches[i].id)) {
+          previousBatchId = batches[i].id;
+          break;
+        }
+      }
+      
+      if (previousBatchId == null) {
+        throw StateError('No previous batch found to settle.');
+      }
+      batchToSettle = previousBatchId;
+    }
+    
+    // Check if already settled
+    if (settledBatchIds.contains(batchToSettle)) {
+      throw StateError('Batch $batchToSettle has already been settled.');
+    }
+    
+    // Get all paid orders from the batch to settle
     final settledOrders = orders
         .where(
           (order) =>
-              order.batchId == batchId &&
+              order.batchId == batchToSettle &&
               order.status == DemoOrderStatus.processing &&
               order.paymentStatus == DemoPaymentStatus.simulated,
         )
         .toList();
-    if (settledOrders.fold(0, (sum, order) => sum + order.wholesalePrice) !=
-        currentBatchTarget) {
+    
+    if (settledOrders.isEmpty) {
       throw StateError(
-        'Paid order total does not match the full batch target.',
+        'No paid orders found in batch $batchToSettle to settle.',
       );
     }
-    settledBatchIds.add(batchId);
+    
+    // Mark batch as settled and credit reseller wallets
+    settledBatchIds.add(batchToSettle);
+    
+    // Track credited orders to prevent duplicate credits
+    final creditedOrderIds = walletEntries.map((e) => e.orderId).toSet();
+    
     for (final order in settledOrders) {
+      // Skip if already credited (duplicate prevention)
+      if (creditedOrderIds.contains(order.id)) {
+        auditLog.insert(
+          0,
+          'Skipped duplicate credit for order ${order.id}.',
+        );
+        continue;
+      }
+      
       order.status = DemoOrderStatus.delivered;
       order.reseller.capital += order.wholesalePrice;
       order.reseller.profit += order.profit;
@@ -588,10 +792,13 @@ class DemoOmsStore {
         ),
       );
     }
+    
     auditLog.insert(
       0,
-      'Demo batch $batchId fully settled; ${settledOrders.length} orders credited. No real funds moved.',
+      'Demo batch $batchToSettle fully settled; ${settledOrders.length} orders credited. No real funds moved.',
     );
+    
+    // Now create the next batch
     createNextBatch();
     return true;
   }
@@ -702,6 +909,9 @@ class DemoOmsStore {
     _seedInitialData();
     createNextBatch(initial: true);
     auditLog.insert(0, 'System reset to default data and settings.');
+    
+    // Restart automation after reset
+    startAutomation();
   }
 
   void _requireCurrentOpenOrder(DemoOrder order) {
