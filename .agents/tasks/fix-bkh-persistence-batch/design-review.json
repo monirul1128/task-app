@@ -1,0 +1,94 @@
+{
+  "approved": false,
+  "findings": [
+    {
+      "id": "HIGH-1",
+      "severity": "HIGH",
+      "title": "DemoOrder.createdAt is final, cannot be reassigned on transfer",
+      "location": "File 2 (lib/oms_demo.dart), _transferOrderDirect() modification",
+      "description": "The design shows updating order.createdAt on transfer, but the actual source code declares it as 'final DateTime createdAt' which cannot be reassigned in Dart.",
+      "fix": "Change DemoOrder.createdAt from 'final' to mutable, then update _transferOrderDirect() to reset the timestamp"
+    },
+    {
+      "id": "HIGH-2",
+      "severity": "HIGH",
+      "title": "Settings persistence methods lack complete specification",
+      "location": "File 1 (lib/firestore_service.dart), Settings persistence methods",
+      "description": "The design adds saveSettings() and loadSettings() but doesn't specify return type, error handling for network failures vs. first run, or the exact method signature.",
+      "fix": "Provide complete method signatures with explicit error handling for network failures and first-run scenarios"
+    },
+    {
+      "id": "HIGH-3",
+      "severity": "HIGH",
+      "title": "Batch settlement duplicate prevention check placement unclear",
+      "location": "File 2 (lib/oms_demo.dart), settleCurrentBatch() rewrite",
+      "description": "The duplicate check settledBatchIds.contains() occurs after finding the batch to settle, creating ambiguity about race condition prevention. The design acknowledges Edge Case 8 but doesn't clarify execution order.",
+      "fix": "Clarify that the duplicate check must occur immediately after identifying batchToSettle and before any settlement operations"
+    },
+    {
+      "id": "MEDIUM-1",
+      "severity": "MEDIUM",
+      "title": "Batch period enforcement logic integration unclear",
+      "location": "File 2 (lib/oms_demo.dart), checkBatchCompletion() method",
+      "description": "The design introduces checkBatchCompletion() but doesn't clearly state whether it replaces checkAndAutoSettleBatch() or is called by it.",
+      "fix": "Specify that checkAndAutoSettleBatch() should be completely replaced with the new logic, or show how checkBatchCompletion() integrates with existing method"
+    },
+    {
+      "id": "MEDIUM-2",
+      "severity": "MEDIUM",
+      "title": "Write-through pattern async usage ambiguous in UI handlers",
+      "location": "File 3 (lib/main.dart), Customer/Product add operations",
+      "description": "The design shows setState inside try block after await, but doesn't clearly show the async function wrapper and proper error handling flow.",
+      "fix": "Provide complete async function signatures showing await before setState, with clear separation of success and error paths"
+    },
+    {
+      "id": "MEDIUM-3",
+      "severity": "MEDIUM",
+      "title": "Batch division field serialization format unspecified",
+      "location": "File 1 (lib/firestore_service.dart), saveBatch() method",
+      "description": "The design states division is saved as 'array' but doesn't specify Firestore Array vs string vs other format, affecting deserialization in loadBatches().",
+      "fix": "Specify that division is saved as Firestore List<int> and show the exact deserialization code with List.from() cast"
+    },
+    {
+      "id": "MEDIUM-4",
+      "severity": "MEDIUM",
+      "title": "Batch restoration from Firestore implementation missing",
+      "location": "File 2 (lib/oms_demo.dart), Edge Case 2 solution",
+      "description": "The design describes batch restoration in Edge Case 2 but doesn't show WHERE or HOW batches are restored in oms_demo.dart. No new method is specified.",
+      "fix": "Add restoreBatchesFromFirestore() method to DemoOmsStore and show its invocation from main()"
+    },
+    {
+      "id": "MEDIUM-5",
+      "severity": "MEDIUM",
+      "title": "Wallet update persistence not implemented in settlement",
+      "location": "File 2 (lib/oms_demo.dart), settleCurrentBatch() rewrite",
+      "description": "The rewritten settleCurrentBatch() updates in-memory wallet but has only a comment about Firestore update, no actual call to updateResellerWallet().",
+      "fix": "Add await FirestoreService.updateResellerWallet() call in the settlement loop after each wallet update"
+    },
+    {
+      "id": "NIT-1",
+      "severity": "NIT",
+      "title": "Settings validation enforcement location unclear",
+      "location": "File 1 (lib/firestore_service.dart), saveSettings() method",
+      "description": "The design specifies validation rules but doesn't show where validation is enforced - UI layer or service layer.",
+      "fix": "Either add validation to saveSettings() or document that validation occurs in UI before calling the method"
+    },
+    {
+      "id": "NIT-2",
+      "severity": "NIT",
+      "title": "Audit log timestamp format inconsistent with implementation",
+      "location": "File 2 (lib/oms_demo.dart), Logging section",
+      "description": "The design states log format includes [timestamp] prefix, but code examples show logs without timestamps.",
+      "fix": "Either add timestamp prefix to all log entries or update the format specification to remove [timestamp] prefix"
+    }
+  ],
+  "reviewDoc": "c:\\Users\\360\\Documents\\task app\\.agents\\tasks\\fix-bkh-persistence-batch\\design-review.md",
+  "summary": {
+    "totalFindings": 10,
+    "highSeverity": 3,
+    "mediumSeverity": 5,
+    "nitSeverity": 2,
+    "verdict": "CHANGES_REQUESTED",
+    "reason": "3 HIGH findings and 5 MEDIUM findings must be resolved before implementation. Core issues: final field reassignment, missing method specifications, and incomplete async patterns."
+  }
+}

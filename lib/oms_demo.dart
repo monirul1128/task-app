@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:excel/excel.dart';
+import 'firestore_service.dart';
 
 enum DemoOrderStatus { pending, processing, delivered, cancelled }
 
@@ -74,7 +75,7 @@ class DemoOrder {
   DemoOrderStatus status = DemoOrderStatus.pending;
   DemoPaymentStatus paymentStatus = DemoPaymentStatus.unpaid;
   int transferNumber = 0;
-  final DateTime createdAt; // Timestamp for transfer period tracking
+  DateTime createdAt; // Timestamp for transfer period tracking - MUTABLE for transfers
 
   int get profit => retailPrice - wholesalePrice;
 }
@@ -413,15 +414,24 @@ class DemoOmsStore {
           'B-${(int.parse(currentBatchId.substring(2)) + 1).toString().padLeft(3, '0')}';
       currentBatchTarget = target;
     }
-    batches.add(
-      DemoBatch(
-        id: currentBatchId,
-        target: target,
-        division: List.unmodifiable(division),
-        previousTarget: previousTarget,
-        growthRate: appliedGrowthRate,
-      ),
+    
+    final newBatch = DemoBatch(
+      id: currentBatchId,
+      target: target,
+      division: List.unmodifiable(division),
+      previousTarget: previousTarget,
+      growthRate: appliedGrowthRate,
     );
+    
+    batches.add(newBatch);
+    
+    // Save batch to Firestore
+    try {
+      FirestoreService.saveBatch(newBatch, 'active');
+    } catch (e) {
+      auditLog.insert(0, 'Failed to save batch to Firestore: $e');
+    }
+    
     for (final amount in division) {
       final product = products[_productCursor++ % products.length];
       final customer = customers[_customerCursor++ % customers.length];
@@ -651,6 +661,7 @@ class DemoOmsStore {
     
     final previousReseller = order.reseller.name;
     order.reseller = active[nextIndex];
+    order.createdAt = DateTime.now(); // RESET TIMESTAMP for new reseller
     _resellerCursor = nextIndex + 1;
     
     auditLog.insert(
@@ -674,31 +685,47 @@ class DemoOmsStore {
     final now = DateTime.now();
     final cycleDuration = Duration(hours: settings.cycleHours);
     
-    // Check if cycle period has passed
-    if (now.difference(currentBatch.createdAt) >= cycleDuration) {
-      // Check if current batch is fully paid
-      if (batchOrderTotal == currentBatchTarget &&
-          batchPaidTotal == currentBatchTarget) {
-        try {
-          // Auto-settle previous batch and create next batch
-          settleCurrentBatch();
-          auditLog.insert(
-            0,
-            'Auto-settlement triggered after ${settings.cycleHours}h cycle period.',
-          );
-        } catch (e) {
-          auditLog.insert(
-            0,
-            'Auto-settlement failed: ${e.toString()}',
-          );
-        }
+    // Check BOTH conditions for batch completion:
+    // 1. Cycle period elapsed
+    // 2. All payments completed
+    final periodElapsed = now.difference(currentBatch.createdAt) >= cycleDuration;
+    final paymentsComplete = (batchOrderTotal == currentBatchTarget) &&
+                             (batchPaidTotal == currentBatchTarget);
+    
+    // Batch completes ONLY when BOTH conditions are met
+    if (periodElapsed && paymentsComplete) {
+      try {
+        // Auto-settle previous batch and create next batch
+        settleCurrentBatch();
+        auditLog.insert(
+          0,
+          'Auto-settlement triggered: ${settings.cycleHours}h period elapsed and all payments completed.',
+        );
+      } catch (e) {
+        auditLog.insert(
+          0,
+          'Auto-settlement failed: ${e.toString()}',
+        );
       }
+    } else if (periodElapsed && !paymentsComplete) {
+      // Period elapsed but payments incomplete - keep batch active, continue transfers
+      auditLog.insert(
+        0,
+        'Batch period ${settings.cycleHours}h elapsed, but payments incomplete (৳$batchPaidTotal / ৳$currentBatchTarget). Continuing transfers...',
+      );
+    } else if (!periodElapsed && paymentsComplete) {
+      // Payments complete but period not elapsed - wait
+      final remainingMinutes = cycleDuration.inMinutes - now.difference(currentBatch.createdAt).inMinutes;
+      auditLog.insert(
+        0,
+        'All payments completed, but waiting for batch period (${remainingMinutes} minutes remaining).',
+      );
     }
   }
 
   bool settleCurrentBatch() {
     // NEW LOGIC: Settle the PREVIOUS batch when current batch completes
-    // When current batch is fully paid, settle previous batch and create next batch
+    // Pattern: Current batch complete → Previous batch settled + Next batch created
     
     if (!settings.systemEnabled) {
       throw StateError(
@@ -714,16 +741,16 @@ class DemoOmsStore {
       );
     }
     
-    // Find previous batch to settle (the one before current)
+    // Find current batch index
     final currentBatchIndex = batches.indexWhere((b) => b.id == currentBatchId);
     if (currentBatchIndex == -1) {
       throw StateError('Current batch not found.');
     }
     
-    // If this is the first batch (B-001), settle it directly
+    // Determine which batch to settle
     String batchToSettle;
     if (currentBatchIndex == 0) {
-      // First batch - settle current batch
+      // First batch (B-001): settle current batch directly
       batchToSettle = currentBatchId;
     } else {
       // Find previous batch that hasn't been settled yet
@@ -741,7 +768,7 @@ class DemoOmsStore {
       batchToSettle = previousBatchId;
     }
     
-    // Check if already settled
+    // Check if already settled (duplicate prevention)
     if (settledBatchIds.contains(batchToSettle)) {
       throw StateError('Batch $batchToSettle has already been settled.');
     }
@@ -762,12 +789,20 @@ class DemoOmsStore {
       );
     }
     
-    // Mark batch as settled and credit reseller wallets
+    // Mark batch as settled
     settledBatchIds.add(batchToSettle);
+    
+    // Update batch status in Firestore
+    try {
+      FirestoreService.updateBatchStatus(batchToSettle, 'settled');
+    } catch (e) {
+      auditLog.insert(0, 'Failed to update batch status in Firestore: $e');
+    }
     
     // Track credited orders to prevent duplicate credits
     final creditedOrderIds = walletEntries.map((e) => e.orderId).toSet();
     
+    // Credit reseller wallets and mark orders as delivered
     for (final order in settledOrders) {
       // Skip if already credited (duplicate prevention)
       if (creditedOrderIds.contains(order.id)) {
@@ -781,6 +816,8 @@ class DemoOmsStore {
       order.status = DemoOrderStatus.delivered;
       order.reseller.capital += order.wholesalePrice;
       order.reseller.profit += order.profit;
+      
+      // Add wallet entry
       walletEntries.add(
         DemoWalletEntry(
           reference:
@@ -791,6 +828,17 @@ class DemoOmsStore {
           reseller: order.reseller,
         ),
       );
+      
+      // Update reseller wallet in Firestore
+      try {
+        FirestoreService.updateResellerWallet(
+          email: order.reseller.email,
+          capital: order.reseller.capital,
+          profit: order.reseller.profit,
+        );
+      } catch (e) {
+        auditLog.insert(0, 'Failed to update reseller wallet in Firestore: $e');
+      }
     }
     
     auditLog.insert(

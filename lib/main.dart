@@ -2970,11 +2970,23 @@ class _AdminLoginPageState extends State<AdminLoginPage> {
     }
     setState(() => busy = true);
     try {
-      await widget.onSignIn(email.text, password.text);
+      // Verify admin credentials from Firestore
+      final isValid = await FirestoreService.verifyAdminLogin(
+        email.text.trim(),
+        password.text,
+      );
+      
+      if (isValid) {
+        await widget.onSignIn(email.text, password.text);
+      } else {
+        widget.onMessage('Invalid administrator credentials');
+      }
     } on FirebaseAuthException catch (error) {
       widget.onMessage(error.message ?? error.code);
     } on StateError catch (error) {
       widget.onMessage(error.message);
+    } catch (error) {
+      widget.onMessage('Login error: $error');
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -3101,25 +3113,40 @@ class _AuthPageState extends State<AuthPage> {
         return;
       }
       
-      // Check for Admin login with stored credentials
-      final isAdmin = await FirestoreService.verifyAdminLogin(loginEmail, loginPassword);
-      if (isAdmin) {
-        widget.onMessage('Admin login successful!');
-        widget.onOpen('adminHome');
-        return;
-      }
+      setState(() => busy = true);
       
-      // Check for Reseller login - check registered resellers
-      if (_registeredResellers.containsKey(loginEmail)) {
-        final reseller = _registeredResellers[loginEmail]!;
-        if (reseller['password'] == loginPassword) {
+      try {
+        // Check for Admin login with stored credentials
+        final isAdmin = await FirestoreService.verifyAdminLogin(loginEmail, loginPassword);
+        if (isAdmin) {
+          widget.onMessage('Admin login successful!');
+          widget.onOpen('adminHome');
+          return;
+        }
+        
+        // Check for Reseller login - check from Firestore
+        final isReseller = await FirestoreService.verifyResellerLogin(loginEmail, loginPassword);
+        if (isReseller) {
+          // Update local registry
+          final resellerInfo = await FirestoreService.getResellerInfo(loginEmail);
+          if (resellerInfo != null) {
+            _registeredResellers[loginEmail] = {
+              'name': resellerInfo['name'] as String,
+              'mobile': resellerInfo['mobile'] as String,
+              'password': resellerInfo['password'] as String,
+            };
+          }
           widget.onMessage('Reseller login successful!');
           widget.onOpen('home|$loginEmail'); // Pass email with page
           return;
         }
+        
+        widget.onMessage('Invalid email or password');
+      } catch (e) {
+        widget.onMessage('Login error: $e');
+      } finally {
+        if (mounted) setState(() => busy = false);
       }
-      
-      widget.onMessage('Invalid email or password');
       return;
     }
     
@@ -4439,7 +4466,7 @@ class _AdminProductsState extends State<AdminProducts> {
               PrimaryButton(
                 label: 'Add Product',
                 icon: Icons.add_rounded,
-                onPressed: () {
+                onPressed: () async {
                   if (category.text.trim().isEmpty ||
                       title.text.trim().isEmpty ||
                       wholesalePrice == null ||
@@ -4455,20 +4482,28 @@ class _AdminProductsState extends State<AdminProducts> {
                     );
                     return;
                   }
-                  setState(
-                    () => demoOms.products.add(
-                      DemoProduct(
-                        title: title.text.trim(),
-                        category: category.text.trim(),
-                        description: description.text.trim(),
-                        wholesalePrice: wholesalePrice,
-                      ),
-                    ),
+                  
+                  final newProduct = DemoProduct(
+                    title: title.text.trim(),
+                    category: category.text.trim(),
+                    description: description.text.trim(),
+                    wholesalePrice: wholesalePrice,
                   );
                   
-                  // Save to Firestore
-                  final newProduct = demoOms.products.last;
-                  FirestoreService.saveProduct(newProduct);
+                  // Save to Firestore first
+                  try {
+                    await FirestoreService.saveProduct(newProduct);
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Failed to save product: $e'),
+                        backgroundColor: red,
+                      ),
+                    );
+                    return;
+                  }
+                  
+                  setState(() => demoOms.products.add(newProduct));
                   
                   title.clear();
                   category.clear();
@@ -6399,7 +6434,7 @@ class _AdminSettingsState extends State<AdminSettings> {
               PrimaryButton(
                 label: 'Save Settings',
                 icon: Icons.save_rounded,
-                onPressed: () {
+                onPressed: () async {
                   final targetAmount = int.tryParse(target.text.trim());
                   final cycleHours = int.tryParse(cycle.text.trim());
                   final transferHours = int.tryParse(transfer.text.trim());
@@ -6440,6 +6475,20 @@ class _AdminSettingsState extends State<AdminSettings> {
                     ..growthRate = int.parse(growth.replaceAll('%', ''))
                     ..cycleHours = cycleHours
                     ..transferHours = transferHours;
+                  
+                  // Save settings to Firestore
+                  try {
+                    await FirestoreService.saveSettings(demoOms.settings);
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Failed to save settings: $e'),
+                        backgroundColor: red,
+                      ),
+                    );
+                    return;
+                  }
+                  
                   demoOms.auditLog.insert(
                     0,
                     'Settings saved: system ${enabled ? 'on' : 'off'}, profit ${demoOms.settings.profitRate}%, growth ${demoOms.settings.growthRate}%.',

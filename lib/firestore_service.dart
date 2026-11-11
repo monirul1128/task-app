@@ -208,11 +208,107 @@ class FirestoreService {
     return true;
   }
   
+  /// Save settings to Firestore
+  static Future<void> saveSettings(DemoSettings settings) async {
+    try {
+      await _firestore.collection(_settingsCollection).doc('config').set({
+        'profitRate': settings.profitRate,
+        'initialBatchTarget': settings.initialBatchTarget,
+        'growthRate': settings.growthRate,
+        'cycleHours': settings.cycleHours,
+        'transferHours': settings.transferHours,
+        'systemEnabled': settings.systemEnabled,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      throw StateError('Failed to save settings: $e');
+    }
+  }
+  
+  /// Load settings from Firestore
+  static Future<DemoSettings?> loadSettings() async {
+    try {
+      final doc = await _firestore.collection(_settingsCollection).doc('config').get();
+      if (!doc.exists) return null;
+      
+      final data = doc.data()!;
+      final settings = DemoSettings();
+      settings.profitRate = data['profitRate'] as int? ?? 30;
+      settings.initialBatchTarget = data['initialBatchTarget'] as int? ?? 500;
+      settings.growthRate = data['growthRate'] as int? ?? 50;
+      settings.cycleHours = data['cycleHours'] as int? ?? 36;
+      settings.transferHours = data['transferHours'] as int? ?? 6;
+      settings.systemEnabled = data['systemEnabled'] as bool? ?? true;
+      
+      return settings;
+    } catch (e) {
+      print('Failed to load settings: $e');
+      return null;
+    }
+  }
+  
+  /// Save batch to Firestore
+  static Future<void> saveBatch(DemoBatch batch, String status) async {
+    try {
+      await _firestore.collection(_batchesCollection).doc(batch.id).set({
+        'id': batch.id,
+        'target': batch.target,
+        'division': batch.division,
+        'createdAt': Timestamp.fromDate(batch.createdAt),
+        'status': status,
+        'previousTarget': batch.previousTarget,
+        'growthRate': batch.growthRate,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      throw StateError('Failed to save batch: $e');
+    }
+  }
+  
+  /// Update batch status in Firestore
+  static Future<void> updateBatchStatus(String batchId, String status) async {
+    try {
+      await _firestore.collection(_batchesCollection).doc(batchId).update({
+        'status': status,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      throw StateError('Failed to update batch status: $e');
+    }
+  }
+  
+  /// Load all batches from Firestore
+  static Future<List<Map<String, dynamic>>> loadBatches() async {
+    try {
+      final snapshot = await _firestore.collection(_batchesCollection).get();
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        return {
+          'id': data['id'] as String,
+          'target': data['target'] as int,
+          'division': List<int>.from(data['division'] as List),
+          'createdAt': (data['createdAt'] as Timestamp).toDate(),
+          'status': data['status'] as String,
+          'previousTarget': data['previousTarget'] as int?,
+          'growthRate': data['growthRate'] as int?,
+        };
+      }).toList();
+    } catch (e) {
+      print('Failed to load batches: $e');
+      return [];
+    }
+  }
+  
   /// Load all system data
   static Future<void> loadSystemData() async {
+    // Initialize default admin credentials if not exists
+    await _initializeAdminCredentials();
+    
     final customers = await loadCustomers();
     final products = await loadProducts();
     final resellers = await loadResellers();
+    final settings = await loadSettings();
+    final batches = await loadBatches();
     
     // Load customers
     if (customers.isNotEmpty) {
@@ -242,6 +338,60 @@ class FirestoreService {
         reseller.profit = data['profit'] as int? ?? 0;
         demoOms.resellers.add(reseller);
       }
+    }
+    
+    // Load settings
+    if (settings != null) {
+      demoOms.settings.systemEnabled = settings.systemEnabled;
+      demoOms.settings.profitRate = settings.profitRate;
+      demoOms.settings.initialBatchTarget = settings.initialBatchTarget;
+      demoOms.settings.growthRate = settings.growthRate;
+      demoOms.settings.cycleHours = settings.cycleHours;
+      demoOms.settings.transferHours = settings.transferHours;
+    }
+    
+    // Load batches and reconstruct state
+    if (batches.isNotEmpty) {
+      demoOms.batches.clear();
+      demoOms.settledBatchIds.clear();
+      
+      for (final batchData in batches) {
+        final batch = DemoBatch(
+          id: batchData['id'] as String,
+          target: batchData['target'] as int,
+          division: List<int>.from(batchData['division'] as List),
+          previousTarget: batchData['previousTarget'] as int?,
+          growthRate: batchData['growthRate'] as int?,
+          createdAt: batchData['createdAt'] as DateTime,
+        );
+        demoOms.batches.add(batch);
+        
+        final status = batchData['status'] as String;
+        if (status == 'settled') {
+          demoOms.settledBatchIds.add(batch.id);
+        } else if (status == 'active') {
+          demoOms.currentBatchId = batch.id;
+          demoOms.currentBatchTarget = batch.target;
+        }
+      }
+    }
+  }
+  
+  /// Initialize default admin credentials
+  static Future<void> _initializeAdminCredentials() async {
+    try {
+      final doc = await _firestore.collection(_adminCollection).doc('credentials').get();
+      if (!doc.exists) {
+        // Set default admin credentials
+        await _firestore.collection(_adminCollection).doc('credentials').set({
+          'email': 'admin@bkh.com',
+          'password': 'admin123',
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      }
+    } catch (e) {
+      // Ignore error if Firestore not accessible
+      print('Failed to initialize admin credentials: $e');
     }
   }
   
