@@ -748,10 +748,13 @@ class DemoOmsStore {
     }
     
     // Determine which batch to settle
-    String batchToSettle;
+    String? batchToSettle;
     if (currentBatchIndex == 0) {
-      // First batch (B-001): settle current batch directly
-      batchToSettle = currentBatchId;
+      // First batch (B-001): DO NOT settle yet, just create next batch
+      batchToSettle = null; // No settlement on first batch completion
+    } else if (currentBatchIndex == 1) {
+      // Second batch (B-002) completing: settle the first batch (B-001)
+      batchToSettle = batches[0].id;
     } else {
       // Find previous batch that hasn't been settled yet
       String? previousBatchId;
@@ -761,92 +764,91 @@ class DemoOmsStore {
           break;
         }
       }
-      
-      if (previousBatchId == null) {
-        throw StateError('No previous batch found to settle.');
-      }
       batchToSettle = previousBatchId;
     }
     
-    // Check if already settled (duplicate prevention)
-    if (settledBatchIds.contains(batchToSettle)) {
-      throw StateError('Batch $batchToSettle has already been settled.');
-    }
-    
-    // Get all paid orders from the batch to settle
-    final settledOrders = orders
-        .where(
-          (order) =>
-              order.batchId == batchToSettle &&
-              order.status == DemoOrderStatus.processing &&
-              order.paymentStatus == DemoPaymentStatus.simulated,
-        )
-        .toList();
-    
-    if (settledOrders.isEmpty) {
-      throw StateError(
-        'No paid orders found in batch $batchToSettle to settle.',
-      );
-    }
-    
-    // Mark batch as settled
-    settledBatchIds.add(batchToSettle);
-    
-    // Update batch status in Firestore
-    try {
-      FirestoreService.updateBatchStatus(batchToSettle, 'settled');
-    } catch (e) {
-      auditLog.insert(0, 'Failed to update batch status in Firestore: $e');
-    }
-    
-    // Track credited orders to prevent duplicate credits
-    final creditedOrderIds = walletEntries.map((e) => e.orderId).toSet();
-    
-    // Credit reseller wallets and mark orders as delivered
-    for (final order in settledOrders) {
-      // Skip if already credited (duplicate prevention)
-      if (creditedOrderIds.contains(order.id)) {
-        auditLog.insert(
-          0,
-          'Skipped duplicate credit for order ${order.id}.',
-        );
-        continue;
+    // If there's a batch to settle, proceed with settlement
+    if (batchToSettle != null) {
+      // Check if already settled (duplicate prevention)
+      if (settledBatchIds.contains(batchToSettle)) {
+        throw StateError('Batch $batchToSettle has already been settled.');
       }
       
-      order.status = DemoOrderStatus.delivered;
-      order.reseller.capital += order.wholesalePrice;
-      order.reseller.profit += order.profit;
+      // Get all paid orders from the batch to settle
+      final settledOrders = orders
+          .where(
+            (order) =>
+                order.batchId == batchToSettle &&
+                order.status == DemoOrderStatus.processing &&
+                order.paymentStatus == DemoPaymentStatus.simulated,
+          )
+          .toList();
       
-      // Add wallet entry
-      walletEntries.add(
-        DemoWalletEntry(
-          reference:
-              'TX-${(_nextTransactionNumber++).toString().padLeft(5, '0')}',
-          orderId: order.id,
-          capital: order.wholesalePrice,
-          profit: order.profit,
-          reseller: order.reseller,
-        ),
-      );
+      if (settledOrders.isEmpty) {
+        throw StateError(
+          'No paid orders found in batch $batchToSettle to settle.',
+        );
+      }
       
-      // Update reseller wallet in Firestore
+      // Mark batch as settled
+      settledBatchIds.add(batchToSettle);
+      
+      // Update batch status in Firestore
       try {
-        FirestoreService.updateResellerWallet(
-          email: order.reseller.email,
-          capital: order.reseller.capital,
-          profit: order.reseller.profit,
-        );
+        FirestoreService.updateBatchStatus(batchToSettle, 'settled');
       } catch (e) {
-        auditLog.insert(0, 'Failed to update reseller wallet in Firestore: $e');
+        auditLog.insert(0, 'Failed to update batch status in Firestore: $e');
       }
+      
+      // Track credited orders to prevent duplicate credits
+      final creditedOrderIds = walletEntries.map((e) => e.orderId).toSet();
+      
+      // Credit reseller wallets and mark orders as delivered
+      for (final order in settledOrders) {
+        // Skip if already credited (duplicate prevention)
+        if (creditedOrderIds.contains(order.id)) {
+          auditLog.insert(
+            0,
+            'Skipped duplicate credit for order ${order.id}.',
+          );
+          continue;
+        }
+        
+        order.status = DemoOrderStatus.delivered;
+        order.reseller.capital += order.wholesalePrice;
+        order.reseller.profit += order.profit;
+        
+        // Add wallet entry
+        walletEntries.add(
+          DemoWalletEntry(
+            reference:
+                'TX-${(_nextTransactionNumber++).toString().padLeft(5, '0')}',
+            orderId: order.id,
+            capital: order.wholesalePrice,
+            profit: order.profit,
+            reseller: order.reseller,
+          ),
+        );
+        
+        // Update reseller wallet in Firestore
+        try {
+          FirestoreService.updateResellerWallet(
+            email: order.reseller.email,
+            capital: order.reseller.capital,
+            profit: order.reseller.profit,
+          );
+        } catch (e) {
+          auditLog.insert(0, 'Failed to update reseller wallet in Firestore: $e');
+        }
+      }
+      
+      auditLog.insert(
+        0,
+        'Demo batch $batchToSettle fully settled; ${settledOrders.length} orders credited. No real funds moved.',
+      );
     }
     
-    auditLog.insert(
-      0,
-      'Demo batch $batchToSettle fully settled; ${settledOrders.length} orders credited. No real funds moved.',
-    );
-    
-    // Now create the next batch
+    // Always create the next batch when current batch completes
     createNextBatch();
     return true;
   }
