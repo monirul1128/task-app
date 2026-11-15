@@ -235,6 +235,11 @@ class _HubShellState extends State<HubShell> {
       });
       return;
     }
+    
+    // Don't load system data here - keep in-memory changes intact
+    // Data is only loaded once in main() at app startup
+    
+    if (!mounted) return;
     setState(() {
       _role = 'reseller';
       _page = 'home';
@@ -272,6 +277,10 @@ class _HubShellState extends State<HubShell> {
 
   Future<void> _signInAdmin(String email, String password) async {
     await _adminAuth.signIn(email, password);
+    
+    // Don't load system data here - keep in-memory changes intact
+    // Data is only loaded once in main() at app startup
+    
     if (!mounted) return;
     setState(() => _page = 'adminHome');
   }
@@ -6299,7 +6308,7 @@ class _AdminSettingsState extends State<AdminSettings> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    demoOms.resetSystem();
+    await demoOms.resetSystem();
     target.text = '${demoOms.settings.initialBatchTarget}';
     cycle.text = '${demoOms.settings.cycleHours}';
     transfer.text = '${demoOms.settings.transferHours}';

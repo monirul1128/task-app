@@ -115,7 +115,7 @@ void main() {
       );
     });
 
-    test('system reset restores initial records, batch, and settings', () {
+    test('system reset restores initial records, batch, and settings', () async {
       final store = DemoOmsStore();
       store.settings
         ..systemEnabled = false
@@ -134,7 +134,7 @@ void main() {
         ),
       );
 
-      store.resetSystem();
+      await store.resetSystem();
 
       expect(store.settings.systemEnabled, isTrue);
       expect(store.settings.profitRate, 30);

@@ -362,7 +362,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    demoOms.resetSystem();
+    await demoOms.resetSystem();
     await tester.pumpWidget(BechaKenaHubApp(adminAuth: FakeAdminAuthService()));
     await tester.tap(find.text('Administrator'));
     await tester.pumpAndSettle();
@@ -392,7 +392,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    demoOms.resetSystem();
+    await demoOms.resetSystem();
     demoOms.products.removeAt(0);
     final auth = FakeAdminAuthService();
     await tester.pumpWidget(BechaKenaHubApp(adminAuth: auth));

@@ -13,6 +13,7 @@ class FirestoreService {
   static const String _batchesCollection = 'batches';
   static const String _settingsCollection = 'settings';
   static const String _adminCollection = 'admin';
+  static const String _adminWalletCollection = 'admin_wallet';
   
   /// Save customer to Firestore
   static Future<void> saveCustomer(DemoCustomer customer) async {
@@ -299,6 +300,109 @@ class FirestoreService {
     }
   }
   
+  /// Save order to Firestore
+  static Future<void> saveOrder(DemoOrder order) async {
+    try {
+      await _firestore.collection(_ordersCollection).doc(order.id).set({
+        'id': order.id,
+        'batchId': order.batchId,
+        'customerName': order.customer.name,
+        'customerMobile': order.customer.mobile,
+        'customerAddress': order.customer.address,
+        'productTitle': order.product.title,
+        'productCategory': order.product.category,
+        'productDescription': order.product.description,
+        'productWholesalePrice': order.product.wholesalePrice,
+        'resellerEmail': order.reseller.email,
+        'resellerName': order.reseller.name,
+        'resellerMobile': order.reseller.mobile,
+        'wholesalePrice': order.wholesalePrice,
+        'retailPrice': order.retailPrice,
+        'status': order.status.name,
+        'paymentStatus': order.paymentStatus.name,
+        'transferNumber': order.transferNumber,
+        'createdAt': Timestamp.fromDate(order.createdAt),
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      throw StateError('Failed to save order: $e');
+    }
+  }
+  
+  /// Update order status in Firestore
+  static Future<void> updateOrderStatus(
+    String orderId,
+    String status,
+    String paymentStatus,
+  ) async {
+    try {
+      await _firestore.collection(_ordersCollection).doc(orderId).update({
+        'status': status,
+        'paymentStatus': paymentStatus,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      throw StateError('Failed to update order status: $e');
+    }
+  }
+  
+  /// Load all orders from Firestore
+  static Future<List<Map<String, dynamic>>> loadOrders() async {
+    try {
+      final snapshot = await _firestore.collection(_ordersCollection).get();
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        return {
+          'id': data['id'] as String,
+          'batchId': data['batchId'] as String,
+          'customerName': data['customerName'] as String,
+          'customerMobile': data['customerMobile'] as String,
+          'customerAddress': data['customerAddress'] as String,
+          'productTitle': data['productTitle'] as String,
+          'productCategory': data['productCategory'] as String,
+          'productDescription': data['productDescription'] as String,
+          'productWholesalePrice': data['productWholesalePrice'] as int,
+          'resellerEmail': data['resellerEmail'] as String,
+          'resellerName': data['resellerName'] as String,
+          'resellerMobile': data['resellerMobile'] as String,
+          'wholesalePrice': data['wholesalePrice'] as int,
+          'retailPrice': data['retailPrice'] as int,
+          'status': data['status'] as String,
+          'paymentStatus': data['paymentStatus'] as String,
+          'transferNumber': data['transferNumber'] as int,
+          'createdAt': (data['createdAt'] as Timestamp).toDate(),
+        };
+      }).toList();
+    } catch (e) {
+      print('Failed to load orders: $e');
+      return [];
+    }
+  }
+  
+  /// Save admin wallet to Firestore
+  static Future<void> saveAdminWallet(int balance) async {
+    try {
+      await _firestore.collection(_adminWalletCollection).doc('balance').set({
+        'balance': balance,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      throw StateError('Failed to save admin wallet: $e');
+    }
+  }
+  
+  /// Load admin wallet from Firestore
+  static Future<int> loadAdminWallet() async {
+    try {
+      final doc = await _firestore.collection(_adminWalletCollection).doc('balance').get();
+      if (!doc.exists) return 0;
+      return doc.data()?['balance'] as int? ?? 0;
+    } catch (e) {
+      print('Failed to load admin wallet: $e');
+      return 0;
+    }
+  }
+  
   /// Load all system data
   static Future<void> loadSystemData() async {
     // Initialize default admin credentials if not exists
@@ -309,6 +413,8 @@ class FirestoreService {
     final resellers = await loadResellers();
     final settings = await loadSettings();
     final batches = await loadBatches();
+    final orders = await loadOrders();
+    final adminWalletBalance = await loadAdminWallet();
     
     // Load customers
     if (customers.isNotEmpty) {
@@ -375,6 +481,75 @@ class FirestoreService {
         }
       }
     }
+    
+    // Load orders and reconstruct order objects
+    if (orders.isNotEmpty) {
+      demoOms.orders.clear();
+      
+      for (final orderData in orders) {
+        // Find matching customer
+        final customer = demoOms.customers.firstWhere(
+          (c) => c.mobile == orderData['customerMobile'],
+          orElse: () => DemoCustomer(
+            orderData['customerName'] as String,
+            orderData['customerMobile'] as String,
+            orderData['customerAddress'] as String,
+          ),
+        );
+        
+        // Find matching product
+        final product = demoOms.products.firstWhere(
+          (p) => p.title == orderData['productTitle'],
+          orElse: () => DemoProduct(
+            title: orderData['productTitle'] as String,
+            category: orderData['productCategory'] as String,
+            description: orderData['productDescription'] as String,
+            wholesalePrice: orderData['productWholesalePrice'] as int,
+          ),
+        );
+        
+        // Find matching reseller
+        final reseller = demoOms.resellers.firstWhere(
+          (r) => r.email == orderData['resellerEmail'],
+          orElse: () => DemoReseller(
+            orderData['resellerName'] as String,
+            orderData['resellerMobile'] as String,
+            orderData['resellerEmail'] as String,
+          ),
+        );
+        
+        final order = DemoOrder(
+          id: orderData['id'] as String,
+          batchId: orderData['batchId'] as String,
+          customer: customer,
+          product: product,
+          reseller: reseller,
+          wholesalePrice: orderData['wholesalePrice'] as int,
+          retailPrice: orderData['retailPrice'] as int,
+          createdAt: orderData['createdAt'] as DateTime,
+        );
+        
+        // Restore order status
+        final statusStr = orderData['status'] as String;
+        order.status = DemoOrderStatus.values.firstWhere(
+          (s) => s.name == statusStr,
+          orElse: () => DemoOrderStatus.pending,
+        );
+        
+        final paymentStatusStr = orderData['paymentStatus'] as String;
+        order.paymentStatus = DemoPaymentStatus.values.firstWhere(
+          (s) => s.name == paymentStatusStr,
+          orElse: () => DemoPaymentStatus.unpaid,
+        );
+        
+        order.transferNumber = orderData['transferNumber'] as int;
+        
+        demoOms.orders.add(order);
+      }
+    }
+    
+    // Load admin wallet
+    demoOms.adminWallet = adminWalletBalance;
   }
   
   /// Initialize default admin credentials
@@ -397,17 +572,45 @@ class FirestoreService {
   
   /// Clear all data (for reset)
   static Future<void> clearAllData() async {
+    // Use batch operations for better performance
+    final batch = _firestore.batch();
+    
     // Delete all customers
     final customersSnapshot = await _firestore.collection(_customersCollection).get();
     for (final doc in customersSnapshot.docs) {
-      await doc.reference.delete();
+      batch.delete(doc.reference);
     }
     
     // Delete all products
     final productsSnapshot = await _firestore.collection(_productsCollection).get();
     for (final doc in productsSnapshot.docs) {
-      await doc.reference.delete();
+      batch.delete(doc.reference);
     }
+    
+    // Delete all batches
+    final batchesSnapshot = await _firestore.collection(_batchesCollection).get();
+    for (final doc in batchesSnapshot.docs) {
+      batch.delete(doc.reference);
+    }
+    
+    // Delete all orders
+    final ordersSnapshot = await _firestore.collection(_ordersCollection).get();
+    for (final doc in ordersSnapshot.docs) {
+      batch.delete(doc.reference);
+    }
+    
+    // Delete settings
+    final settingsSnapshot = await _firestore.collection(_settingsCollection).get();
+    for (final doc in settingsSnapshot.docs) {
+      batch.delete(doc.reference);
+    }
+    
+    // Delete admin wallet
+    final adminWalletDoc = _firestore.collection(_adminWalletCollection).doc('admin');
+    batch.delete(adminWalletDoc);
+    
+    // Commit all deletes in one batch
+    await batch.commit();
     
     // Don't clear resellers - they need to remain registered
   }

@@ -137,6 +137,9 @@ class DemoOmsStore {
     // Start with empty data - Admin will add customers, products, resellers
     // DO NOT load demo data automatically - only on reset
   }
+  
+  // Admin wallet balance (resellers pay wholesale prices to admin)
+  int adminWallet = 0;
 
   void _seedInitialData() {
     // This method is used for "Reset System" functionality only
@@ -398,22 +401,60 @@ class DemoOmsStore {
         'At least one customer and product are required to create orders.',
       );
     }
+    
     final previousTarget = initial ? null : currentBatchTarget;
     final appliedGrowthRate = initial ? null : settings.growthRate;
-    final target = initial
-        ? settings.initialBatchTarget
-        : calculateNextBatchTarget(previousTarget!, appliedGrowthRate!);
-    final division = divideTarget(target);
-    if (division.isEmpty) {
-      throw StateError(
-        'Target ৳$target must equal the sum of consecutive ৳50 multiples, such as ৳50 + ৳100 + ৳150 + ৳200.',
-      );
-    }
+    
     if (!initial) {
       currentBatchId =
           'B-${(int.parse(currentBatchId.substring(2)) + 1).toString().padLeft(3, '0')}';
+    }
+    
+    // FIXED: Remove division system, use actual product prices
+    // Create orders using real product wholesale prices
+    final newOrders = <DemoOrder>[];
+    final active = activeResellers;
+    
+    // Assign orders to resellers in round-robin fashion
+    var orderCount = products.length; // Create one order per product
+    for (var i = 0; i < orderCount; i++) {
+      final product = products[i % products.length];
+      final customer = customers[_customerCursor++ % customers.length];
+      final reseller = active[_resellerCursor++ % active.length];
+      
+      // Use actual product wholesale price (NOT fixed division amounts)
+      final order = DemoOrder(
+        id: 'ORD-${_nextOrderNumber++}',
+        batchId: currentBatchId,
+        customer: customer,
+        product: product,
+        reseller: reseller,
+        wholesalePrice: product.wholesalePrice, // Use real product price
+        retailPrice: product.retailPrice(settings.profitRate), // Calculate based on product
+      );
+      
+      newOrders.add(order);
+      orders.add(order);
+      
+      // Save order to Firestore (fire and forget with error handling)
+      FirestoreService.saveOrder(order).catchError((e) {
+        auditLog.insert(0, 'Failed to save order to Firestore: $e');
+      });
+    }
+    
+    // Calculate batch target as sum of assigned order prices
+    final target = newOrders.fold<int>(0, (sum, order) => sum + order.wholesalePrice);
+    
+    if (!initial) {
+      currentBatchTarget = target;
+    } else {
+      // For initial batch, update the settings
+      settings.initialBatchTarget = target;
       currentBatchTarget = target;
     }
+    
+    // Create division list from actual order prices for compatibility
+    final division = newOrders.map((o) => o.wholesalePrice).toList();
     
     final newBatch = DemoBatch(
       id: currentBatchId,
@@ -425,33 +466,14 @@ class DemoOmsStore {
     
     batches.add(newBatch);
     
-    // Save batch to Firestore
-    try {
-      FirestoreService.saveBatch(newBatch, 'active');
-    } catch (e) {
+    // Save batch to Firestore (fire and forget with error handling)
+    FirestoreService.saveBatch(newBatch, 'active').catchError((e) {
       auditLog.insert(0, 'Failed to save batch to Firestore: $e');
-    }
+    });
     
-    for (final amount in division) {
-      final product = products[_productCursor++ % products.length];
-      final customer = customers[_customerCursor++ % customers.length];
-      final active = activeResellers;
-      final reseller = active[_resellerCursor++ % active.length];
-      orders.add(
-        DemoOrder(
-          id: 'ORD-${_nextOrderNumber++}',
-          batchId: currentBatchId,
-          customer: customer,
-          product: product,
-          reseller: reseller,
-          wholesalePrice: amount,
-          retailPrice: (amount * (100 + settings.profitRate) / 100).round(),
-        ),
-      );
-    }
     auditLog.insert(
       0,
-      'Orders assigned for demo batch $currentBatchId; target ৳$target.',
+      'Orders assigned for demo batch $currentBatchId; target ৳$target (${newOrders.length} orders).',
     );
   }
 
@@ -466,48 +488,60 @@ class DemoOmsStore {
         'The initial target can only be changed before the first batch receives a payment confirmation.',
       );
     }
-    final division = divideTarget(target);
-    if (division.isEmpty) {
-      throw StateError(
-        'Target ৳$target must equal the sum of consecutive ৳50 multiples, such as ৳50 + ৳100 + ৳150 + ৳200.',
-      );
-    }
+    
     if (products.isEmpty || customers.isEmpty || activeResellers.isEmpty) {
       throw StateError(
         'Products, customers, and active resellers are required to assign orders.',
       );
     }
+    
+    // Remove old orders and batch
     orders.removeWhere((order) => order.batchId == currentBatchId);
     batches.removeWhere((batch) => batch.id == currentBatchId);
-    currentBatchTarget = target;
-    settings.initialBatchTarget = target;
+    
+    // Create new orders using actual product prices (not division)
+    final newOrders = <DemoOrder>[];
+    final active = activeResellers;
+    
+    var orderCount = products.length; // Create one order per product
+    for (var i = 0; i < orderCount; i++) {
+      final product = products[i % products.length];
+      final customer = customers[_customerCursor++ % customers.length];
+      final reseller = active[_resellerCursor++ % active.length];
+      
+      final order = DemoOrder(
+        id: 'ORD-${_nextOrderNumber++}',
+        batchId: currentBatchId,
+        customer: customer,
+        product: product,
+        reseller: reseller,
+        wholesalePrice: product.wholesalePrice,
+        retailPrice: product.retailPrice(settings.profitRate),
+      );
+      
+      newOrders.add(order);
+      orders.add(order);
+    }
+    
+    // Calculate actual target from orders
+    final actualTarget = newOrders.fold<int>(0, (sum, order) => sum + order.wholesalePrice);
+    currentBatchTarget = actualTarget;
+    settings.initialBatchTarget = actualTarget;
+    
+    // Create division list from actual order prices
+    final division = newOrders.map((o) => o.wholesalePrice).toList();
+    
     batches.add(
       DemoBatch(
         id: currentBatchId,
-        target: target,
+        target: actualTarget,
         division: List.unmodifiable(division),
       ),
     );
-    for (final amount in division) {
-      final product = products[_productCursor++ % products.length];
-      final customer = customers[_customerCursor++ % customers.length];
-      final active = activeResellers;
-      final reseller = active[_resellerCursor++ % active.length];
-      orders.add(
-        DemoOrder(
-          id: 'ORD-${_nextOrderNumber++}',
-          batchId: currentBatchId,
-          customer: customer,
-          product: product,
-          reseller: reseller,
-          wholesalePrice: amount,
-          retailPrice: (amount * (100 + settings.profitRate) / 100).round(),
-        ),
-      );
-    }
+    
     auditLog.insert(
       0,
-      'Initial demo batch target changed to ৳$target and orders reassigned.',
+      'Initial demo batch target changed to ৳$actualTarget (${newOrders.length} orders) and orders reassigned.',
     );
   }
 
@@ -561,31 +595,39 @@ class DemoOmsStore {
       );
     }
     
+    // FIXED: Add to admin wallet when reseller confirms payment
+    adminWallet += targetOrder.wholesalePrice;
+    
+    // Save admin wallet to Firestore
+    try {
+      FirestoreService.saveAdminWallet(adminWallet);
+    } catch (e) {
+      auditLog.insert(0, 'Failed to save admin wallet to Firestore: $e');
+    }
+    
     // Update only this specific order
     targetOrder.paymentStatus = DemoPaymentStatus.simulated;
     targetOrder.status = DemoOrderStatus.processing;
     
+    // Update order in Firestore
+    try {
+      FirestoreService.updateOrderStatus(
+        targetOrder.id,
+        targetOrder.status.name,
+        targetOrder.paymentStatus.name,
+      );
+    } catch (e) {
+      auditLog.insert(0, 'Failed to update order in Firestore: $e');
+    }
+    
     auditLog.insert(
       0,
-      'DEMO ONLY: ${targetOrder.id} marked paid by simulated confirmation; no provider transaction verified.',
+      'DEMO ONLY: ${targetOrder.id} marked paid by simulated confirmation; admin wallet += ৳${targetOrder.wholesalePrice}; no provider transaction verified.',
     );
     
-    // Check if current batch is now complete and trigger auto-settlement
-    if (batchOrderTotal == currentBatchTarget &&
-        batchPaidTotal == currentBatchTarget) {
-      try {
-        settleCurrentBatch();
-        auditLog.insert(
-          0,
-          'Auto-settlement triggered: current batch completed with payment of ${targetOrder.id}.',
-        );
-      } catch (e) {
-        auditLog.insert(
-          0,
-          'Auto-settlement check after payment: ${e.toString()}',
-        );
-      }
-    }
+    // FIXED: Check BOTH conditions before settling
+    // Do NOT settle immediately when payments complete
+    // Must also wait for batch period to elapse
   }
 
   void transferOrder(DemoOrder order, {bool skipAutoCheck = false}) {
@@ -931,7 +973,15 @@ class DemoOmsStore {
     );
   }
 
-  void resetSystem() {
+  Future<void> resetSystem() async {
+    // FIRST: Clear all data from Firestore
+    try {
+      await FirestoreService.clearAllData();
+    } catch (e) {
+      auditLog.insert(0, 'Warning: Failed to clear Firestore data: $e');
+    }
+    
+    // SECOND: Clear in-memory data
     customers.clear();
     products.clear();
     resellers.clear();
@@ -941,6 +991,7 @@ class DemoOmsStore {
     walletEntries.clear();
     auditLog.clear();
     settledBatchIds.clear();
+    adminWallet = 0; // Reset admin wallet
     settings
       ..systemEnabled = true
       ..profitRate = 30
@@ -956,7 +1007,34 @@ class DemoOmsStore {
     _customerCursor = 0;
     _productCursor = 0;
     _resellerCursor = 0;
+    
+    // THIRD: Seed demo data in memory
     _seedInitialData();
+    
+    // FOURTH: Save all demo data to Firestore
+    try {
+      // Save all demo customers
+      for (final customer in customers) {
+        await FirestoreService.saveCustomer(customer);
+      }
+      
+      // Save all demo products
+      for (final product in products) {
+        await FirestoreService.saveProduct(product);
+      }
+      
+      // Save settings
+      await FirestoreService.saveSettings(settings);
+      
+      // Reset admin wallet in Firestore
+      await FirestoreService.saveAdminWallet(0);
+      
+      auditLog.insert(0, 'Demo data saved to Firestore successfully.');
+    } catch (e) {
+      auditLog.insert(0, 'Warning: Failed to save demo data to Firestore: $e');
+    }
+    
+    // FIFTH: Create initial batch
     createNextBatch(initial: true);
     auditLog.insert(0, 'System reset to default data and settings.');
     
