@@ -606,7 +606,7 @@ class FirestoreService {
     }
     
     // Delete admin wallet
-    final adminWalletDoc = _firestore.collection(_adminWalletCollection).doc('admin');
+    final adminWalletDoc = _firestore.collection(_adminWalletCollection).doc('balance');
     batch.delete(adminWalletDoc);
     
     // Commit all deletes in one batch
