@@ -236,8 +236,13 @@ class _HubShellState extends State<HubShell> {
       return;
     }
     
-    // Don't load system data here - keep in-memory changes intact
-    // Data is only loaded once in main() at app startup
+    // CRITICAL: Reload all data from Firestore on every login
+    // This ensures data persists across role switches and app restarts
+    try {
+      await FirestoreService.loadSystemData();
+    } catch (e) {
+      _message('Failed to load system data: $e');
+    }
     
     if (!mounted) return;
     setState(() {
@@ -278,8 +283,13 @@ class _HubShellState extends State<HubShell> {
   Future<void> _signInAdmin(String email, String password) async {
     await _adminAuth.signIn(email, password);
     
-    // Don't load system data here - keep in-memory changes intact
-    // Data is only loaded once in main() at app startup
+    // CRITICAL: Reload all data from Firestore on every login
+    // This ensures data persists across role switches and app restarts
+    try {
+      await FirestoreService.loadSystemData();
+    } catch (e) {
+      _message('Failed to load system data: $e');
+    }
     
     if (!mounted) return;
     setState(() => _page = 'adminHome');
@@ -3136,6 +3146,10 @@ class _AuthPageState extends State<AuthPage> {
         // Check for Reseller login - check from Firestore
         final isReseller = await FirestoreService.verifyResellerLogin(loginEmail, loginPassword);
         if (isReseller) {
+          // CRITICAL: Reload all data from Firestore on every login
+          // This ensures data persists across role switches and app restarts
+          await FirestoreService.loadSystemData();
+          
           // Update local registry
           final resellerInfo = await FirestoreService.getResellerInfo(loginEmail);
           if (resellerInfo != null) {
@@ -4026,6 +4040,16 @@ class _AdminCustomersState extends State<AdminCustomers> {
       }
       if (newCustomers.isNotEmpty) {
         setState(() => demoOms.customers.addAll(newCustomers));
+        
+        // Save all imported customers to Firestore
+        for (final customer in newCustomers) {
+          try {
+            await FirestoreService.saveCustomer(customer);
+          } catch (e) {
+            // Log error but continue with other customers
+            print('Failed to save customer ${customer.mobile}: $e');
+          }
+        }
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -4296,6 +4320,16 @@ class _AdminProductsState extends State<AdminProducts> {
       }
       if (imported.isNotEmpty) {
         setState(() => demoOms.products.addAll(imported));
+        
+        // Save all imported products to Firestore
+        for (final product in imported) {
+          try {
+            await FirestoreService.saveProduct(product);
+          } catch (e) {
+            // Log error but continue with other products
+            print('Failed to save product ${product.title}: $e');
+          }
+        }
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -6484,6 +6518,21 @@ class _AdminSettingsState extends State<AdminSettings> {
                     ..growthRate = int.parse(growth.replaceAll('%', ''))
                     ..cycleHours = cycleHours
                     ..transferHours = transferHours;
+                  
+                  // CRITICAL: When system is turned ON, create initial batch if none exists
+                  if (enabled && demoOms.batches.isEmpty) {
+                    try {
+                      demoOms.createNextBatch(initial: true);
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Failed to create initial batch: $e'),
+                          backgroundColor: red,
+                        ),
+                      );
+                      return;
+                    }
+                  }
                   
                   // Save settings to Firestore
                   try {
