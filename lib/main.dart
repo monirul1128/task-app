@@ -6497,6 +6497,56 @@ class _AdminSettingsState extends State<AdminSettings> {
                     );
                     return;
                   }
+                  
+                  // CRITICAL: Validate requirements when turning system ON
+                  if (enabled && !demoOms.settings.systemEnabled) {
+                    // System is being turned ON - validate requirements
+                    final missingItems = <String>[];
+                    
+                    if (demoOms.customers.isEmpty) {
+                      missingItems.add('customers');
+                    }
+                    if (demoOms.products.isEmpty) {
+                      missingItems.add('products');
+                    }
+                    if (demoOms.activeResellers.isEmpty) {
+                      missingItems.add('active resellers');
+                    }
+                    
+                    // Validate that products exist for all required division amounts
+                    final division = DemoOmsStore.divideTarget(targetAmount);
+                    final missingPrices = <int>[];
+                    for (final divisionAmount in division) {
+                      final hasProduct = demoOms.products.any(
+                        (p) => p.wholesalePrice == divisionAmount,
+                      );
+                      if (!hasProduct) {
+                        missingPrices.add(divisionAmount);
+                      }
+                    }
+                    
+                    if (missingItems.isNotEmpty || missingPrices.isNotEmpty) {
+                      final errorParts = <String>[];
+                      if (missingItems.isNotEmpty) {
+                        errorParts.add('Missing: ${missingItems.join(", ")}');
+                      }
+                      if (missingPrices.isNotEmpty) {
+                        errorParts.add('Need products with prices: ${missingPrices.join(", ")}৳');
+                      }
+                      
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Cannot turn system ON. ${errorParts.join(". ")}.',
+                          ),
+                          backgroundColor: red,
+                          duration: const Duration(seconds: 5),
+                        ),
+                      );
+                      return;
+                    }
+                  }
+                  
                   try {
                     if (demoOms.currentBatchId == 'B-001' &&
                         demoOms.batchPaidTotal == 0 &&
@@ -6513,6 +6563,8 @@ class _AdminSettingsState extends State<AdminSettings> {
                         .showSnackBar(SnackBar(content: Text(error.message)));
                     return;
                   }
+                  
+                  // Update settings
                   demoOms.settings
                     ..systemEnabled = enabled
                     ..growthRate = int.parse(growth.replaceAll('%', ''))
@@ -6523,11 +6575,22 @@ class _AdminSettingsState extends State<AdminSettings> {
                   if (enabled && demoOms.batches.isEmpty) {
                     try {
                       demoOms.createNextBatch(initial: true);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('System ON: Batch ${demoOms.currentBatchId} created with target ৳${demoOms.currentBatchTarget}'),
+                          backgroundColor: green,
+                        ),
+                      );
                     } catch (e) {
+                      // Revert system enabled status
+                      demoOms.settings.systemEnabled = false;
+                      setState(() => enabled = false);
+                      
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text('Failed to create initial batch: $e'),
                           backgroundColor: red,
+                          duration: const Duration(seconds: 5),
                         ),
                       );
                       return;
@@ -6551,11 +6614,16 @@ class _AdminSettingsState extends State<AdminSettings> {
                     0,
                     'Settings saved: system ${enabled ? 'on' : 'off'}, profit ${demoOms.settings.profitRate}%, growth ${demoOms.settings.growthRate}%.',
                   );
+                  
+                  if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
+                    SnackBar(
                       content: Text(
-                        'Settings saved. Existing batch target is unchanged; product retail prices use the updated profit rate.',
+                        enabled 
+                          ? 'System is now ON. Orders will be created and assigned automatically.'
+                          : 'Settings saved. Existing batch target is unchanged; product retail prices use the updated profit rate.',
                       ),
+                      backgroundColor: enabled ? green : brand,
                     ),
                   );
                   setState(() {});

@@ -405,32 +405,50 @@ class DemoOmsStore {
     final previousTarget = initial ? null : currentBatchTarget;
     final appliedGrowthRate = initial ? null : settings.growthRate;
     
+    // Calculate target for this batch
+    final target = initial 
+        ? settings.initialBatchTarget 
+        : calculateNextBatchTarget(currentBatchTarget, settings.growthRate);
+    
+    // Divide target into divisions
+    final division = divideTarget(target);
+    if (division.isEmpty) {
+      throw StateError(
+        'Target ৳$target cannot be divided into valid divisions (must be sum of consecutive 50 multiples).',
+      );
+    }
+    
     if (!initial) {
       currentBatchId =
           'B-${(int.parse(currentBatchId.substring(2)) + 1).toString().padLeft(3, '0')}';
     }
     
-    // FIXED: Remove division system, use actual product prices
-    // Create orders using real product wholesale prices
+    // CRITICAL FIX: Create orders using division-based product matching
     final newOrders = <DemoOrder>[];
     final active = activeResellers;
     
-    // Assign orders to resellers in round-robin fashion
-    var orderCount = products.length; // Create one order per product
-    for (var i = 0; i < orderCount; i++) {
-      final product = products[i % products.length];
+    // For each division amount, find matching product and create order
+    for (final divisionAmount in division) {
+      // Find product with matching wholesale price
+      final matchingProduct = products.firstWhere(
+        (p) => p.wholesalePrice == divisionAmount,
+        orElse: () => throw StateError(
+          'No product found with wholesale price ৳$divisionAmount for division. Please add products with prices: ${division.join(", ")}৳',
+        ),
+      );
+      
       final customer = customers[_customerCursor++ % customers.length];
       final reseller = active[_resellerCursor++ % active.length];
       
-      // Use actual product wholesale price (NOT fixed division amounts)
+      // Create order with division amount (NOT product.wholesalePrice directly!)
       final order = DemoOrder(
         id: 'ORD-${_nextOrderNumber++}',
         batchId: currentBatchId,
         customer: customer,
-        product: product,
+        product: matchingProduct,
         reseller: reseller,
-        wholesalePrice: product.wholesalePrice, // Use real product price
-        retailPrice: product.retailPrice(settings.profitRate), // Calculate based on product
+        wholesalePrice: divisionAmount, // Use division amount
+        retailPrice: (divisionAmount * (100 + settings.profitRate) / 100).round(),
       );
       
       newOrders.add(order);
@@ -442,19 +460,11 @@ class DemoOmsStore {
       });
     }
     
-    // Calculate batch target as sum of assigned order prices
-    final target = newOrders.fold<int>(0, (sum, order) => sum + order.wholesalePrice);
-    
-    if (!initial) {
-      currentBatchTarget = target;
-    } else {
-      // For initial batch, update the settings
+    // Update batch target
+    currentBatchTarget = target;
+    if (initial) {
       settings.initialBatchTarget = target;
-      currentBatchTarget = target;
     }
-    
-    // Create division list from actual order prices for compatibility
-    final division = newOrders.map((o) => o.wholesalePrice).toList();
     
     final newBatch = DemoBatch(
       id: currentBatchId,
@@ -473,7 +483,7 @@ class DemoOmsStore {
     
     auditLog.insert(
       0,
-      'Orders assigned for demo batch $currentBatchId; target ৳$target (${newOrders.length} orders).',
+      'Orders assigned for demo batch $currentBatchId; target ৳$target (${newOrders.length} orders with divisions: ${division.join(", ")}৳).',
     );
   }
 
@@ -495,17 +505,39 @@ class DemoOmsStore {
       );
     }
     
-    // Remove old orders and batch
+    // Validate and divide new target
+    final division = divideTarget(target);
+    if (division.isEmpty) {
+      throw StateError(
+        'Target ৳$target cannot be divided into valid divisions (must be sum of consecutive 50 multiples).',
+      );
+    }
+    
+    // Delete old B-001 orders from Firestore
+    final oldOrders = orders.where((order) => order.batchId == currentBatchId).toList();
+    for (final order in oldOrders) {
+      FirestoreService.updateOrderStatus(order.id, 'cancelled', 'unpaid').catchError((e) {
+        auditLog.insert(0, 'Failed to delete old order from Firestore: $e');
+      });
+    }
+    
+    // Remove old orders and batch from memory
     orders.removeWhere((order) => order.batchId == currentBatchId);
     batches.removeWhere((batch) => batch.id == currentBatchId);
     
-    // Create new orders using actual product prices (not division)
+    // Create new orders using division-based product matching
     final newOrders = <DemoOrder>[];
     final active = activeResellers;
     
-    var orderCount = products.length; // Create one order per product
-    for (var i = 0; i < orderCount; i++) {
-      final product = products[i % products.length];
+    for (final divisionAmount in division) {
+      // Find product matching division amount
+      final matchingProduct = products.firstWhere(
+        (p) => p.wholesalePrice == divisionAmount,
+        orElse: () => throw StateError(
+          'No product found with wholesale price ৳$divisionAmount. Please add products with prices: ${division.join(", ")}৳',
+        ),
+      );
+      
       final customer = customers[_customerCursor++ % customers.length];
       final reseller = active[_resellerCursor++ % active.length];
       
@@ -513,35 +545,45 @@ class DemoOmsStore {
         id: 'ORD-${_nextOrderNumber++}',
         batchId: currentBatchId,
         customer: customer,
-        product: product,
+        product: matchingProduct,
         reseller: reseller,
-        wholesalePrice: product.wholesalePrice,
-        retailPrice: product.retailPrice(settings.profitRate),
+        wholesalePrice: divisionAmount, // Use division amount
+        retailPrice: (divisionAmount * (100 + settings.profitRate) / 100).round(),
       );
       
       newOrders.add(order);
       orders.add(order);
+      
+      // Save new order to Firestore
+      FirestoreService.saveOrder(order).catchError((e) {
+        auditLog.insert(0, 'Failed to save new order to Firestore: $e');
+      });
     }
     
-    // Calculate actual target from orders
-    final actualTarget = newOrders.fold<int>(0, (sum, order) => sum + order.wholesalePrice);
-    currentBatchTarget = actualTarget;
-    settings.initialBatchTarget = actualTarget;
+    currentBatchTarget = target;
+    settings.initialBatchTarget = target;
     
-    // Create division list from actual order prices
-    final division = newOrders.map((o) => o.wholesalePrice).toList();
-    
-    batches.add(
-      DemoBatch(
-        id: currentBatchId,
-        target: actualTarget,
-        division: List.unmodifiable(division),
-      ),
+    final newBatch = DemoBatch(
+      id: currentBatchId,
+      target: target,
+      division: List.unmodifiable(division),
     );
+    
+    batches.add(newBatch);
+    
+    // Save batch to Firestore
+    FirestoreService.saveBatch(newBatch, 'active').catchError((e) {
+      auditLog.insert(0, 'Failed to save batch to Firestore: $e');
+    });
+    
+    // Save settings to Firestore
+    FirestoreService.saveSettings(settings).catchError((e) {
+      auditLog.insert(0, 'Failed to save settings to Firestore: $e');
+    });
     
     auditLog.insert(
       0,
-      'Initial demo batch target changed to ৳$actualTarget (${newOrders.length} orders) and orders reassigned.',
+      'Initial demo batch target changed to ৳$target (${newOrders.length} orders with divisions: ${division.join(", ")}৳) and orders reassigned.',
     );
   }
 
